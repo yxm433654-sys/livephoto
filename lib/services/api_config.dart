@@ -9,12 +9,12 @@ class ApiConfig {
       return defined;
     }
     if (kIsWeb) {
-      return 'http://localhost:8082';
+      return 'http://localhost:8080';
     }
     if (Platform.isAndroid) {
-      return 'http://127.0.0.1:8082';
+      return 'http://10.0.2.2:8080';
     }
-    return 'http://localhost:8082';
+    return 'http://localhost:8080';
   }
 
   static String get wsBaseUrl {

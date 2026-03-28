@@ -19,6 +19,8 @@ class FileService {
     return base.replace(path: path.startsWith('/') ? path : '/$path');
   }
 
+  // ─── PlatformFile-based methods (backward compatibility) ───
+
   Future<FileUploadResponse> uploadNormal({
     required PlatformFile file,
     int? userId,
@@ -28,15 +30,7 @@ class FileService {
       req.fields['userId'] = userId.toString();
     }
     req.files.add(await _toMultipart(file, 'file'));
-    final streamed = await _http.send(req);
-    final res = await http.Response.fromStream(streamed);
-    final parsed =
-        jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-    final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
-    if (!api.success) {
-      throw Exception(api.message ?? 'Upload failed');
-    }
-    return FileUploadResponse.fromJson(api.data);
+    return _send(req);
   }
 
   Future<FileUploadResponse> uploadLivePhoto({
@@ -51,15 +45,7 @@ class FileService {
     }
     req.files.add(await _toMultipart(jpeg, 'jpeg'));
     req.files.add(await _toMultipart(mov, 'mov'));
-    final streamed = await _http.send(req);
-    final res = await http.Response.fromStream(streamed);
-    final parsed =
-        jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-    final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
-    if (!api.success) {
-      throw Exception(api.message ?? 'Upload failed');
-    }
-    return FileUploadResponse.fromJson(api.data);
+    return _send(req);
   }
 
   Future<FileUploadResponse> uploadMotionPhoto({
@@ -72,6 +58,65 @@ class FileService {
       req.fields['userId'] = userId.toString();
     }
     req.files.add(await _toMultipart(file, 'file'));
+    return _send(req);
+  }
+
+  // ─── Path-based methods (for image_picker / photo_manager) ───
+
+  /// Upload normal image/video by file path
+  Future<FileUploadResponse> uploadNormalByPath({
+    required String filePath,
+    required String fileName,
+    int? userId,
+  }) async {
+    final req = http.MultipartRequest('POST', _uri('/api/files/upload'));
+    if (userId != null) {
+      req.fields['userId'] = userId.toString();
+    }
+    req.files.add(
+        await http.MultipartFile.fromPath('file', filePath, filename: fileName));
+    return _send(req);
+  }
+
+  /// Upload Live Photo by paths (JPEG + MOV)
+  Future<FileUploadResponse> uploadLivePhotoByPath({
+    required String jpegPath,
+    required String jpegName,
+    required String videoPath,
+    required String videoName,
+    int? userId,
+  }) async {
+    final req =
+        http.MultipartRequest('POST', _uri('/api/files/upload/live-photo'));
+    if (userId != null) {
+      req.fields['userId'] = userId.toString();
+    }
+    req.files.add(
+        await http.MultipartFile.fromPath('jpeg', jpegPath, filename: jpegName));
+    req.files.add(
+        await http.MultipartFile.fromPath('mov', videoPath, filename: videoName));
+    return _send(req);
+  }
+
+  /// Upload Motion Photo by path (single JPEG with embedded video)
+  Future<FileUploadResponse> uploadMotionPhotoByPath({
+    required String filePath,
+    required String fileName,
+    int? userId,
+  }) async {
+    final req =
+        http.MultipartRequest('POST', _uri('/api/files/upload/motion-photo'));
+    if (userId != null) {
+      req.fields['userId'] = userId.toString();
+    }
+    req.files.add(
+        await http.MultipartFile.fromPath('file', filePath, filename: fileName));
+    return _send(req);
+  }
+
+  // ─── Helpers ───
+
+  Future<FileUploadResponse> _send(http.MultipartRequest req) async {
     final streamed = await _http.send(req);
     final res = await http.Response.fromStream(streamed);
     final parsed =

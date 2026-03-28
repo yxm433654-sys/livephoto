@@ -78,24 +78,13 @@ class _LoginScreenState extends State<LoginScreen>
             controller: controller,
             decoration: const InputDecoration(
               labelText: 'API Base URL',
-              hintText: 'http://192.168.x.x:8082 或 http://127.0.0.1:8082',
+              hintText: 'http://192.168.x.x:8080',
             ),
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.of(ctx).pop(),
                 child: const Text('取消')),
-            TextButton(
-              onPressed: () async {
-                final url = controller.text.trim();
-                final ok = await state.testApiConnection(url);
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(ok ? '连接成功' : '连接失败')),
-                );
-              },
-              child: const Text('测试'),
-            ),
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
               child: const Text('保存'),
