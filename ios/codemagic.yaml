@@ -1,0 +1,31 @@
+workflows:
+  flutter-ios-sideloadly:
+    name: Flutter iOS Release (for Sideloadly)
+    instance_type: mac_mini_m1
+    max_build_duration: 60
+    environment:
+      flutter: 3.19.5 # 这里建议改为你具体的版本号，如 3.22.0
+      xcode: latest   # 建议改为 15.4 或 16.0 等具体版本
+    scripts:
+      - name: Get Flutter packages
+        script: flutter pub get
+      - name: Build iOS Release (No Sign)
+        script: |
+          # 1. 编译 Release 模式，但不签名
+          # 这会生成 build/ios/iphoneos/Runner.app
+          flutter build ios --release --no-codesign
+      - name: Create IPA for Sideloadly
+        script: |
+          # 2. 封装成 Sideloadly 识别的 .ipa 结构
+          set -e # 遇错即停
+          mkdir -p Payload
+          # 将编译出的 Runner.app 复制进 Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          # 压缩并命名
+          zip -r FlutterRelease.ipa Payload
+    artifacts:
+      - FlutterRelease.ipa
+    publishing:
+      email:
+        recipients:
+          - your-email@example.com # 接收通知的邮箱
