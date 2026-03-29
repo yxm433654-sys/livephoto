@@ -32,16 +32,15 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bubbleMaxWidth =
-        math.min(MediaQuery.of(context).size.width * 0.7, 320.0);
+    final mq = MediaQuery.of(context);
+    final screenW = mq.size.width;
+    final screenH = mq.size.height;
+    // 与微信会话内图片/视频接近：宽度约半屏、上限 240dp；竖图高度按宽高比收紧
+    final mediaWidth = math.min(screenW * 0.48, 240.0);
+    final maxMediaHeight = math.min(screenH * 0.36, mediaWidth * 1.75);
     final time = message.createdAt == null
         ? ''
         : DateFormat('HH:mm').format(message.createdAt!.toLocal());
-    final mediaWidth = bubbleMaxWidth;
-    final maxMediaHeight = math.min(
-      MediaQuery.of(context).size.height * 0.5,
-      mediaWidth * 2.5,
-    );
 
     final avatar = _Avatar(
       name: isMine ? myName : peerName,
