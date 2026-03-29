@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:dynamic_photo_chat_flutter/models/file_upload_response.dart';
 import 'package:dynamic_photo_chat_flutter/models/message.dart';
@@ -237,7 +238,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('上传失败: $e')),
+        SnackBar(content: Text('上传失败: ${_toUserError(e)}')),
       );
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -254,70 +255,117 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    final XFile? image = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 85,
-    );
-    if (image == null || !mounted) return;
-
+    if (!mounted) return;
     final state = context.read<AppState>();
     final session = state.session!;
 
     try {
-      final List<AssetPathEntity> paths = await PhotoManager.getAssetPathList(
-        type: RequestType.image,
-      );
+      if (Platform.isIOS) {
+        final asset = await _pickIosImageAsset();
+        if (asset == null || !mounted) return;
 
-      AssetEntity? selectedAsset;
-      for (final path in paths) {
-        final assets = await path.getAssetListRange(start: 0, end: 1000);
-        for (final asset in assets) {
-          final file = await asset.file;
-          if (file?.path == image.path) {
-            selectedAsset = asset;
-            break;
+        if (asset.isLivePhoto) {
+          final livePhotoInfo = await LivePhotoDetector.detectLivePhoto(asset);
+          if (livePhotoInfo != null) {
+            final uploaded = await state.files.uploadLivePhotoAuto(
+              jpegPath: livePhotoInfo.imagePath,
+              movPath: livePhotoInfo.videoPath,
+              userId: session.userId,
+            );
+            await _sendForDynamic(uploaded, session.userId);
+            return;
           }
         }
-        if (selectedAsset != null) break;
-      }
 
-      FileUploadResponse uploaded;
-
-      if (selectedAsset != null && Platform.isIOS) {
-        final livePhotoInfo =
-            await LivePhotoDetector.detectLivePhoto(selectedAsset);
-        if (livePhotoInfo != null) {
-          uploaded = await state.files.uploadLivePhotoAuto(
-            jpegPath: livePhotoInfo.imagePath,
-            movPath: livePhotoInfo.videoPath,
-            userId: session.userId,
-          );
-          await _sendForDynamic(uploaded, session.userId);
-          return;
+        final f = await asset.file;
+        if (f == null) {
+          throw Exception('无法读取图片文件');
         }
+        final uploaded = await state.files.uploadNormalFromPath(
+          filePath: f.path,
+          userId: session.userId,
+        );
+        await _sendForUploadedNormal(uploaded, session.userId);
+        return;
       }
 
-      if (selectedAsset != null && Platform.isAndroid) {
-        final isMotionPhoto =
-            await LivePhotoDetector.detectMotionPhoto(selectedAsset);
-        if (isMotionPhoto) {
-          uploaded = await state.files.uploadMotionPhotoFromPath(
-            filePath: image.path,
-            userId: session.userId,
-          );
-          await _sendForDynamic(uploaded, session.userId);
-          return;
-        }
-      }
-
-      uploaded = await state.files.uploadNormalFromXFile(
-        file: image,
-        userId: session.userId,
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
       );
+      if (image == null || !mounted) return;
+      final uploaded = await state.files
+          .uploadNormalFromXFile(file: image, userId: session.userId);
       await _sendForUploadedNormal(uploaded, session.userId);
     } catch (e) {
       rethrow;
     }
+  }
+
+  Future<AssetEntity?> _pickIosImageAsset() async {
+    final paths = await PhotoManager.getAssetPathList(type: RequestType.image);
+    if (paths.isEmpty || !mounted) return null;
+    final path = paths.first;
+    final assets = await path.getAssetListRange(start: 0, end: 200);
+    if (!mounted) return null;
+    return showModalBottomSheet<AssetEntity>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        final height = MediaQuery.of(ctx).size.height * 0.85;
+        return SafeArea(
+          child: SizedBox(
+            height: height,
+            child: GridView.builder(
+              padding: const EdgeInsets.all(8),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 4,
+                crossAxisSpacing: 6,
+                mainAxisSpacing: 6,
+              ),
+              itemCount: assets.length,
+              itemBuilder: (_, i) {
+                final asset = assets[i];
+                return GestureDetector(
+                  onTap: () => Navigator.of(ctx).pop(asset),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        FutureBuilder<Uint8List?>(
+                          future: asset.thumbnailDataWithSize(
+                            const ThumbnailSize(300, 300),
+                          ),
+                          builder: (_, snap) {
+                            final data = snap.data;
+                            if (data == null) {
+                              return const ColoredBox(color: Colors.black12);
+                            }
+                            return Image.memory(data, fit: BoxFit.cover);
+                          },
+                        ),
+                        if (asset.isLivePhoto)
+                          const Positioned(
+                            right: 6,
+                            top: 6,
+                            child: Icon(
+                              Icons.motion_photos_on,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _pickVideo() async {
@@ -444,7 +492,8 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  Future<void> _refreshVideoCover({required int messageId, required int coverId}) async {
+  Future<void> _refreshVideoCover(
+      {required int messageId, required int coverId}) async {
     final state = context.read<AppState>();
     for (var i = 0; i < 20; i++) {
       await Future<void>.delayed(const Duration(seconds: 2));
