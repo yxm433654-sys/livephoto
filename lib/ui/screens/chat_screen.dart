@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:dynamic_photo_chat_flutter/models/file_upload_response.dart';
 import 'package:dynamic_photo_chat_flutter/models/message.dart';
 import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
+import 'package:dynamic_photo_chat_flutter/ui/screens/dynamic_photo_screen.dart';
 import 'package:dynamic_photo_chat_flutter/ui/screens/video_player_screen.dart';
 import 'package:dynamic_photo_chat_flutter/ui/widgets/message_bubble.dart';
 import 'package:dynamic_photo_chat_flutter/utils/live_photo_detector.dart';
@@ -291,9 +292,25 @@ class _ChatScreenState extends State<ChatScreen> {
 
       final XFile? image = await _picker.pickImage(
         source: ImageSource.gallery,
-        imageQuality: 85,
+        imageQuality: Platform.isAndroid ? null : 85,
       );
       if (image == null || !mounted) return;
+
+      if (Platform.isAndroid) {
+        final isMotion = await LivePhotoDetector.detectMotionPhotoFromPath(
+          image.path,
+        );
+        if (!mounted) return;
+        if (isMotion) {
+          final uploaded = await state.files.uploadMotionPhotoFromPath(
+            filePath: image.path,
+            userId: session.userId,
+          );
+          await _sendForDynamic(uploaded, session.userId);
+          return;
+        }
+      }
+
       final uploaded = await state.files
           .uploadNormalFromXFile(file: image, userId: session.userId);
       await _sendForUploadedNormal(uploaded, session.userId);
@@ -535,6 +552,15 @@ class _ChatScreenState extends State<ChatScreen> {
         .push(MaterialPageRoute(builder: (_) => VideoPlayerScreen(url: url)));
   }
 
+  void _openDynamicPhoto(String coverUrl, String videoUrl) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            DynamicPhotoScreen(coverUrl: coverUrl, videoUrl: videoUrl),
+      ),
+    );
+  }
+
   void _openImagePreview(String url) {
     showDialog<void>(
       context: context,
@@ -604,6 +630,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           isMine: isMine,
                           onPlayVideo: _openPlayer,
                           onPreviewImage: _openImagePreview,
+                          onOpenDynamicPhoto: _openDynamicPhoto,
                         ),
                       );
                     },

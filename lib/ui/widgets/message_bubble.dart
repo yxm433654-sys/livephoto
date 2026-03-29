@@ -3,10 +3,8 @@ import 'dart:math' as math;
 import 'package:dynamic_photo_chat_flutter/models/message.dart';
 import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-import 'package:video_player/video_player.dart';
 
 class MessageBubble extends StatelessWidget {
   const MessageBubble({
@@ -15,12 +13,14 @@ class MessageBubble extends StatelessWidget {
     required this.isMine,
     required this.onPlayVideo,
     required this.onPreviewImage,
+    required this.onOpenDynamicPhoto,
   });
 
   final ChatMessage message;
   final bool isMine;
   final void Function(String url) onPlayVideo;
   final void Function(String url) onPreviewImage;
+  final void Function(String coverUrl, String videoUrl) onOpenDynamicPhoto;
 
   @override
   Widget build(BuildContext context) {
@@ -134,12 +134,35 @@ class MessageBubble extends StatelessWidget {
       }
       final resolvedCover = _resolveUrl(context, cover);
       final resolvedVideo = _resolveUrl(context, video);
-      return _DynamicPhotoPreview(
-        coverUrl: resolvedCover,
-        videoUrl: resolvedVideo,
-        width: mediaWidth,
-        height: mediaHeight,
-        onTapPreview: () => onPreviewImage(resolvedCover),
+      return GestureDetector(
+        onTap: () => onOpenDynamicPhoto(resolvedCover, resolvedVideo),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            width: mediaWidth,
+            height: mediaHeight,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Image.network(
+                  resolvedCover,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) =>
+                      const Center(child: Text('图片加载失败')),
+                ),
+                const Positioned(
+                  right: 6,
+                  top: 6,
+                  child: Icon(
+                    Icons.motion_photos_on,
+                    color: Colors.white,
+                    size: 18,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
 
@@ -194,152 +217,5 @@ class MessageBubble extends StatelessWidget {
     final base = Uri.parse(context.read<AppState>().apiBaseUrl);
     final path = url.startsWith('/') ? url : '/$url';
     return base.replace(path: path, query: null, fragment: null).toString();
-  }
-}
-
-class _DynamicPhotoPreview extends StatefulWidget {
-  const _DynamicPhotoPreview({
-    required this.coverUrl,
-    required this.videoUrl,
-    required this.width,
-    required this.height,
-    required this.onTapPreview,
-  });
-
-  final String coverUrl;
-  final String videoUrl;
-  final double width;
-  final double height;
-  final VoidCallback onTapPreview;
-
-  @override
-  State<_DynamicPhotoPreview> createState() => _DynamicPhotoPreviewState();
-}
-
-class _DynamicPhotoPreviewState extends State<_DynamicPhotoPreview> {
-  VideoPlayerController? _controller;
-  bool _showVideo = false;
-  bool _holding = false;
-  bool _initing = false;
-
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  Future<void> _ensureController() async {
-    if (_controller != null) return;
-    final c = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl));
-    _controller = c;
-    c.addListener(_onTick);
-    await c.initialize();
-    await c.setLooping(false);
-    await c.setVolume(0);
-  }
-
-  void _onTick() {
-    final c = _controller;
-    if (c == null) return;
-    final v = c.value;
-    if (!v.isInitialized) return;
-    if (!v.isPlaying) return;
-    final d = v.duration;
-    if (d == Duration.zero) return;
-    if (v.position + const Duration(milliseconds: 80) < d) return;
-    _endPlayback();
-  }
-
-  Future<void> _startPlayback() async {
-    if (_holding) return;
-    _holding = true;
-    if (_initing) return;
-    _initing = true;
-    try {
-      await HapticFeedback.selectionClick();
-      await _ensureController();
-      if (!mounted) return;
-      final c = _controller;
-      if (c == null) return;
-      await c.seekTo(Duration.zero);
-      await c.play();
-      if (!mounted) return;
-      setState(() => _showVideo = true);
-    } finally {
-      _initing = false;
-    }
-  }
-
-  Future<void> _stopPlayback() async {
-    _holding = false;
-    final c = _controller;
-    if (c == null) {
-      if (_showVideo && mounted) setState(() => _showVideo = false);
-      return;
-    }
-    try {
-      await c.pause();
-      await c.seekTo(Duration.zero);
-    } catch (_) {}
-    if (mounted) setState(() => _showVideo = false);
-  }
-
-  Future<void> _endPlayback() async {
-    if (!_showVideo) return;
-    final c = _controller;
-    if (c == null) return;
-    try {
-      await c.pause();
-      await c.seekTo(Duration.zero);
-    } catch (_) {}
-    if (mounted) setState(() => _showVideo = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final c = _controller;
-    final hasVideo = _showVideo && c != null && c.value.isInitialized;
-    return GestureDetector(
-      onTap: widget.onTapPreview,
-      onLongPressStart: (_) => _startPlayback(),
-      onLongPressEnd: (_) => _stopPlayback(),
-      onLongPressCancel: _stopPlayback,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: SizedBox(
-          width: widget.width,
-          height: widget.height,
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              Image.network(
-                widget.coverUrl,
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) =>
-                    const ColoredBox(color: Colors.black12),
-              ),
-              if (hasVideo)
-                FittedBox(
-                  fit: BoxFit.cover,
-                  child: SizedBox(
-                    width: c.value.size.width,
-                    height: c.value.size.height,
-                    child: VideoPlayer(c),
-                  ),
-                ),
-              const Positioned(
-                right: 6,
-                top: 6,
-                child: Icon(
-                  Icons.motion_photos_on,
-                  color: Colors.white,
-                  size: 18,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }
