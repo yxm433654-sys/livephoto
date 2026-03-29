@@ -55,6 +55,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final state = context.read<AppState>();
     final session = state.session!;
     try {
+      state.prefetchUser(widget.peerId);
       final history = await state.messages.history(
           userId: session.userId, peerId: widget.peerId, page: 0, size: 100);
       _messages
@@ -290,27 +291,48 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
 
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: Platform.isAndroid ? null : 85,
-      );
-      if (image == null || !mounted) return;
-
       if (Platform.isAndroid) {
-        final isMotion = await LivePhotoDetector.detectMotionPhotoFromPath(
-          image.path,
-        );
+        final pick = await _pickAndroidImage();
+        if (pick == null || !mounted) return;
+
+        final String filePath;
+        if (pick.asset != null) {
+          final f = await pick.asset!.file;
+          if (f == null) {
+            throw Exception('无法读取图片文件');
+          }
+          filePath = f.path;
+        } else if (pick.xFile != null) {
+          filePath = pick.xFile!.path;
+        } else {
+          return;
+        }
+
+        final isMotion =
+            await LivePhotoDetector.detectMotionPhotoFromPath(filePath);
         if (!mounted) return;
         if (isMotion) {
           final uploaded = await state.files.uploadMotionPhotoFromPath(
-            filePath: image.path,
+            filePath: filePath,
             userId: session.userId,
           );
           await _sendForDynamic(uploaded, session.userId);
           return;
         }
+
+        final uploaded = await state.files.uploadNormalFromPath(
+          filePath: filePath,
+          userId: session.userId,
+        );
+        await _sendForUploadedNormal(uploaded, session.userId);
+        return;
       }
 
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (image == null || !mounted) return;
       final uploaded = await state.files
           .uploadNormalFromXFile(file: image, userId: session.userId);
       await _sendForUploadedNormal(uploaded, session.userId);
@@ -383,6 +405,109 @@ class _ChatScreenState extends State<ChatScreen> {
         );
       },
     );
+  }
+
+  Future<_AndroidPick?> _pickAndroidImage() async {
+    final picked = await showModalBottomSheet<_AndroidPick>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        final height = MediaQuery.of(ctx).size.height * 0.85;
+        return SafeArea(
+          child: SizedBox(
+            height: height,
+            child: FutureBuilder<List<AssetEntity>>(
+              future: _loadAndroidRecentImages(),
+              builder: (_, snap) {
+                final assets = snap.data;
+                if (assets == null) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (assets.isEmpty) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('未找到照片'),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '如果系统权限是“仅允许部分照片”，这里可能为空；请到系统设置改为允许全部照片，或使用系统选择器。',
+                            textAlign: TextAlign.center,
+                          ),
+                          const SizedBox(height: 12),
+                          FilledButton(
+                            onPressed: () => PhotoManager.openSetting(),
+                            child: const Text('打开系统设置'),
+                          ),
+                          const SizedBox(height: 10),
+                          OutlinedButton(
+                            onPressed: () => Navigator.of(ctx)
+                                .pop(const _AndroidPick(systemPicker: true)),
+                            child: const Text('使用系统选择器'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+                return GridView.builder(
+                  padding: const EdgeInsets.all(8),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 4,
+                    crossAxisSpacing: 6,
+                    mainAxisSpacing: 6,
+                  ),
+                  itemCount: assets.length,
+                  itemBuilder: (_, i) {
+                    final asset = assets[i];
+                    return GestureDetector(
+                      onTap: () =>
+                          Navigator.of(ctx).pop(_AndroidPick(asset: asset)),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: FutureBuilder<Uint8List?>(
+                          future: asset.thumbnailDataWithSize(
+                            const ThumbnailSize(300, 300),
+                          ),
+                          builder: (_, snap) {
+                            final data = snap.data;
+                            if (data == null) {
+                              return const ColoredBox(color: Colors.black12);
+                            }
+                            return Image.memory(data, fit: BoxFit.cover);
+                          },
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+    if (picked == null || !mounted) return null;
+    if (!picked.systemPicker) return picked;
+
+    final XFile? x = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: null,
+    );
+    if (x == null || !mounted) return null;
+    return _AndroidPick(xFile: x);
+  }
+
+  Future<List<AssetEntity>> _loadAndroidRecentImages() async {
+    final paths = await PhotoManager.getAssetPathList(type: RequestType.image);
+    for (final p in paths) {
+      final assets = await p.getAssetListRange(start: 0, end: 200);
+      if (assets.isNotEmpty) return assets;
+    }
+    return <AssetEntity>[];
   }
 
   Future<void> _pickVideo() async {
@@ -601,9 +726,18 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final myId = state.session!.userId;
+    final myName = state.session!.username;
+    final peerName = state.displayNameFor(widget.peerId);
+    final myAvatar = state.avatarUrlFor(myId);
+    final peerAvatar = state.avatarUrlFor(widget.peerId);
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
-        title: Text('与用户 ${widget.peerId} 聊天'),
+        backgroundColor: const Color(0xFFEDEDED),
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        centerTitle: true,
+        title: Text(peerName),
       ),
       body: Column(
         children: [
@@ -617,8 +751,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ? const Center(child: CircularProgressIndicator())
                 : ListView.builder(
                     controller: _scrollCtrl,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                     itemCount: _messages.length,
                     itemBuilder: (ctx, idx) {
                       final m = _messages[idx];
@@ -628,6 +761,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         child: MessageBubble(
                           message: m,
                           isMine: isMine,
+                          myName: myName,
+                          peerName: peerName,
+                          myAvatarUrl: myAvatar,
+                          peerAvatarUrl: peerAvatar,
                           onPlayVideo: _openPlayer,
                           onPreviewImage: _openImagePreview,
                           onOpenDynamicPhoto: _openDynamicPhoto,
@@ -639,7 +776,7 @@ class _ChatScreenState extends State<ChatScreen> {
           SafeArea(
             top: false,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
               child: Row(
                 children: [
                   IconButton(
@@ -653,8 +790,12 @@ class _ChatScreenState extends State<ChatScreen> {
                       onSubmitted: (_) => _sendText(),
                       decoration: const InputDecoration(
                         hintText: '输入消息',
-                        border: OutlineInputBorder(),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.all(Radius.circular(16)),
+                        ),
                         isDense: true,
+                        filled: true,
+                        fillColor: Colors.white,
                       ),
                       minLines: 1,
                       maxLines: 4,
@@ -678,4 +819,11 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
     );
   }
+}
+
+class _AndroidPick {
+  const _AndroidPick({this.asset, this.xFile, this.systemPicker = false});
+  final AssetEntity? asset;
+  final XFile? xFile;
+  final bool systemPicker;
 }

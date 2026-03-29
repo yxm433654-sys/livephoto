@@ -81,24 +81,82 @@ class GoogleMotionPhotoDetector extends MotionPhotoDetector {
     final size = await f.length();
     if (size < 512 * 1024) return false;
 
-    final tail = await _readTail(f, 256 * 1024);
-    final s = utf8.decode(tail, allowMalformed: true).toLowerCase();
+    final head = await _readHead(f, 256 * 1024);
+    final headStr = utf8.decode(head, allowMalformed: true).toLowerCase();
 
-    final hasXmpHint = s.contains('gcamera:motionphoto') ||
-        s.contains('microvideooffset') ||
-        s.contains('microvideopresentationtimestampus') ||
-        s.contains('container:directory') ||
-        s.contains('gcontainer:item');
+    final hasXmpHint = headStr.contains('gcamera:motionphoto') ||
+        headStr.contains('microvideooffset') ||
+        headStr.contains('microvideopresentationtimestampus') ||
+        headStr.contains('microvideo') ||
+        headStr.contains('motionphoto') ||
+        headStr.contains('container:directory') ||
+        headStr.contains('gcontainer:item');
 
     if (!hasXmpHint) return false;
 
-    final hasMp4Hint = s.contains('ftyp') &&
-        (s.contains('mp42') ||
-            s.contains('isom') ||
-            s.contains('avc1') ||
-            s.contains('qt'));
+    final offset = _tryParseVideoOffset(headStr);
+    if (offset != null && offset > 0 && offset < size) {
+      final videoStart = size - offset;
+      if (videoStart >= 0 && videoStart < size) {
+        final win = await _readAt(f, videoStart, 64 * 1024);
+        final w = utf8.decode(win, allowMalformed: true).toLowerCase();
+        return _hasMp4Ftyp(w);
+      }
+    }
 
-    return hasMp4Hint;
+    final tail = await _readTail(f, 4 * 1024 * 1024);
+    final tailStr = utf8.decode(tail, allowMalformed: true).toLowerCase();
+    return _hasMp4Ftyp(tailStr);
+  }
+
+  bool _hasMp4Ftyp(String s) {
+    if (!s.contains('ftyp')) return false;
+    return s.contains('mp42') ||
+        s.contains('isom') ||
+        s.contains('avc1') ||
+        s.contains('qt');
+  }
+
+  int? _tryParseVideoOffset(String xmp) {
+    final patterns = <RegExp>[
+      RegExp(r'microvideooffset\\s*=\\s*\"(\\d+)\"'),
+      RegExp(r'microvideooffset[^0-9]{0,32}(\\d{4,})'),
+      RegExp(r'item:length\\s*=\\s*\"(\\d+)\"'),
+      RegExp(r'<[^>]*microvideooffset[^>]*>(\\d+)</'),
+    ];
+    for (final p in patterns) {
+      final m = p.firstMatch(xmp);
+      if (m != null) {
+        final raw = m.group(1);
+        final v = raw == null ? null : int.tryParse(raw);
+        if (v != null && v > 0) return v;
+      }
+    }
+    return null;
+  }
+
+  Future<List<int>> _readHead(File file, int maxBytes) async {
+    final raf = await file.open();
+    try {
+      await raf.setPosition(0);
+      return raf.read(maxBytes);
+    } finally {
+      await raf.close();
+    }
+  }
+
+  Future<List<int>> _readAt(File file, int start, int maxBytes) async {
+    final raf = await file.open();
+    try {
+      final len = await raf.length();
+      final s = start < 0 ? 0 : start;
+      if (s >= len) return const <int>[];
+      await raf.setPosition(s);
+      final toRead = (s + maxBytes) > len ? (len - s) : maxBytes;
+      return raf.read(toRead);
+    } finally {
+      await raf.close();
+    }
   }
 
   Future<List<int>> _readTail(File file, int maxBytes) async {

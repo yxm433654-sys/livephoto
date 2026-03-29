@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:dynamic_photo_chat_flutter/models/message.dart';
 import 'package:dynamic_photo_chat_flutter/models/session.dart';
+import 'package:dynamic_photo_chat_flutter/models/user.dart';
 import 'package:dynamic_photo_chat_flutter/services/api_client.dart';
 import 'package:dynamic_photo_chat_flutter/services/api_config.dart';
 import 'package:dynamic_photo_chat_flutter/services/auth_service.dart';
@@ -37,6 +38,9 @@ class AppState extends ChangeNotifier {
   late String wsBaseUrl;
 
   final Map<int, int> _unreadByPeer = <int, int>{};
+  final Map<int, UserProfile> _userCache = <int, UserProfile>{};
+  final Map<int, Future<UserProfile?>> _userFetches =
+      <int, Future<UserProfile?>>{};
   final StreamController<ChatMessage> _messageEvents =
       StreamController<ChatMessage>.broadcast();
   RealtimeService? _realtime;
@@ -44,6 +48,49 @@ class AppState extends ChangeNotifier {
   int _lastMessageId = 0;
 
   int unreadCount(int peerId) => _unreadByPeer[peerId] ?? 0;
+
+  String displayNameFor(int userId) {
+    final cached = _userCache[userId];
+    final name = cached?.username.trim();
+    if (name != null && name.isNotEmpty) return name;
+    return '用户 $userId';
+  }
+
+  String? avatarUrlFor(int userId) {
+    final url = _userCache[userId]?.avatarUrl;
+    if (url == null) return null;
+    final v = url.trim();
+    if (v.isEmpty) return null;
+    final parsed = Uri.tryParse(v);
+    if (parsed != null && parsed.hasScheme) return v;
+    final base = Uri.parse(apiBaseUrl);
+    final path = v.startsWith('/') ? v : '/$v';
+    return base.replace(path: path, query: null, fragment: null).toString();
+  }
+
+  Future<UserProfile?> prefetchUser(int userId) {
+    if (userId <= 0) return Future<UserProfile?>.value(null);
+    final cached = _userCache[userId];
+    if (cached != null) return Future<UserProfile?>.value(cached);
+    final existing = _userFetches[userId];
+    if (existing != null) return existing;
+
+    final f = () async {
+      try {
+        final p = await auth.getUser(userId);
+        _userCache[userId] = p;
+        notifyListeners();
+        return p;
+      } catch (_) {
+        return null;
+      } finally {
+        _userFetches.remove(userId);
+      }
+    }();
+
+    _userFetches[userId] = f;
+    return f;
+  }
 
   void clearUnread(int peerId) {
     if (!_unreadByPeer.containsKey(peerId)) return;
@@ -114,6 +161,8 @@ class AppState extends ChangeNotifier {
     session = null;
     await _prefs?.remove(_sessionKey);
     _unreadByPeer.clear();
+    _userCache.clear();
+    _userFetches.clear();
     notifyListeners();
   }
 
