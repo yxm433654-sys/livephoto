@@ -5,6 +5,7 @@ import 'package:dynamic_photo_chat_flutter/models/file_upload_response.dart';
 import 'package:dynamic_photo_chat_flutter/services/api_config.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 
 class FileService {
   FileService({String? baseUrl, http.Client? httpClient})
@@ -39,6 +40,30 @@ class FileService {
     return FileUploadResponse.fromJson(api.data);
   }
 
+  Future<FileUploadResponse> uploadNormalFromXFile({
+    required XFile file,
+    int? userId,
+  }) async {
+    final req = http.MultipartRequest('POST', _uri('/api/files/upload'));
+    if (userId != null) {
+      req.fields['userId'] = userId.toString();
+    }
+    req.files.add(await http.MultipartFile.fromPath(
+      'file',
+      file.path,
+      filename: file.name,
+    ));
+    final streamed = await _http.send(req);
+    final res = await http.Response.fromStream(streamed);
+    final parsed =
+        jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
+    if (!api.success) {
+      throw Exception(api.message ?? 'Upload failed');
+    }
+    return FileUploadResponse.fromJson(api.data);
+  }
+
   Future<FileUploadResponse> uploadLivePhoto({
     required PlatformFile jpeg,
     required PlatformFile mov,
@@ -51,6 +76,29 @@ class FileService {
     }
     req.files.add(await _toMultipart(jpeg, 'jpeg'));
     req.files.add(await _toMultipart(mov, 'mov'));
+    final streamed = await _http.send(req);
+    final res = await http.Response.fromStream(streamed);
+    final parsed =
+        jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
+    if (!api.success) {
+      throw Exception(api.message ?? 'Upload failed');
+    }
+    return FileUploadResponse.fromJson(api.data);
+  }
+
+  Future<FileUploadResponse> uploadLivePhotoAuto({
+    required String jpegPath,
+    required String movPath,
+    int? userId,
+  }) async {
+    final req =
+        http.MultipartRequest('POST', _uri('/api/files/upload/live-photo'));
+    if (userId != null) {
+      req.fields['userId'] = userId.toString();
+    }
+    req.files.add(await http.MultipartFile.fromPath('jpeg', jpegPath));
+    req.files.add(await http.MultipartFile.fromPath('mov', movPath));
     final streamed = await _http.send(req);
     final res = await http.Response.fromStream(streamed);
     final parsed =
@@ -79,6 +127,38 @@ class FileService {
     final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
     if (!api.success) {
       throw Exception(api.message ?? 'Upload failed');
+    }
+    return FileUploadResponse.fromJson(api.data);
+  }
+
+  Future<FileUploadResponse> uploadMotionPhotoFromPath({
+    required String filePath,
+    int? userId,
+  }) async {
+    final req =
+        http.MultipartRequest('POST', _uri('/api/files/upload/motion-photo'));
+    if (userId != null) {
+      req.fields['userId'] = userId.toString();
+    }
+    req.files.add(await http.MultipartFile.fromPath('file', filePath));
+    final streamed = await _http.send(req);
+    final res = await http.Response.fromStream(streamed);
+    final parsed =
+        jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
+    if (!api.success) {
+      throw Exception(api.message ?? 'Upload failed');
+    }
+    return FileUploadResponse.fromJson(api.data);
+  }
+
+  Future<FileUploadResponse> preview({required int fileId}) async {
+    final res = await _http.get(_uri('/api/files/preview/$fileId'));
+    final parsed =
+        jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
+    if (!api.success) {
+      throw Exception(api.message ?? 'Preview failed');
     }
     return FileUploadResponse.fromJson(api.data);
   }

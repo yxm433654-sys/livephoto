@@ -63,13 +63,24 @@ class ChatListScreen extends StatelessWidget {
               separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (ctx, idx) {
                 final peerId = state.peers[idx];
+                final unread = state.unreadCount(peerId);
                 return ListTile(
                   title: Text('用户 $peerId'),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () => state.removePeer(peerId),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (unread > 0)
+                        Badge(
+                          label: Text(unread.toString()),
+                        ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        onPressed: () => state.removePeer(peerId),
+                      ),
+                    ],
                   ),
                   onTap: () {
+                    state.clearUnread(peerId);
                     Navigator.of(context).push(
                       MaterialPageRoute(
                           builder: (_) => ChatScreen(peerId: peerId)),

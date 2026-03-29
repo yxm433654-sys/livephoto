@@ -1,11 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:dynamic_photo_chat_flutter/models/message.dart';
 import 'package:dynamic_photo_chat_flutter/models/session.dart';
 import 'package:dynamic_photo_chat_flutter/services/api_client.dart';
 import 'package:dynamic_photo_chat_flutter/services/api_config.dart';
 import 'package:dynamic_photo_chat_flutter/services/auth_service.dart';
 import 'package:dynamic_photo_chat_flutter/services/file_service.dart';
 import 'package:dynamic_photo_chat_flutter/services/message_service.dart';
+import 'package:dynamic_photo_chat_flutter/services/realtime_service.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -20,6 +23,7 @@ class AppState extends ChangeNotifier {
   static const _peersKey = 'peers';
   static const _apiBaseKey = 'apiBaseUrl';
   static const _wsBaseKey = 'wsBaseUrl';
+  static const _lastMsgIdKey = 'lastMessageId';
 
   late ApiClient api;
   late AuthService auth;
@@ -31,6 +35,21 @@ class AppState extends ChangeNotifier {
   List<int> peers = <int>[];
   late String apiBaseUrl;
   late String wsBaseUrl;
+
+  final Map<int, int> _unreadByPeer = <int, int>{};
+  final StreamController<ChatMessage> _messageEvents =
+      StreamController<ChatMessage>.broadcast();
+  RealtimeService? _realtime;
+  Stream<ChatMessage> get messageEvents => _messageEvents.stream;
+  int _lastMessageId = 0;
+
+  int unreadCount(int peerId) => _unreadByPeer[peerId] ?? 0;
+
+  void clearUnread(int peerId) {
+    if (!_unreadByPeer.containsKey(peerId)) return;
+    _unreadByPeer.remove(peerId);
+    notifyListeners();
+  }
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
@@ -53,6 +72,10 @@ class AppState extends ChangeNotifier {
     if (peerRaw != null) {
       peers = peerRaw.map((e) => int.tryParse(e)).whereType<int>().toList();
     }
+    _lastMessageId = _prefs!.getInt(_lastMsgIdKey) ?? 0;
+    if (session != null) {
+      _startRealtime();
+    }
     notifyListeners();
   }
 
@@ -65,6 +88,9 @@ class AppState extends ChangeNotifier {
     await _prefs?.setString(_apiBaseKey, this.apiBaseUrl);
     await _prefs?.setString(_wsBaseKey, this.wsBaseUrl);
     _buildServices();
+    if (session != null) {
+      _startRealtime();
+    }
     notifyListeners();
   }
 
@@ -72,6 +98,7 @@ class AppState extends ChangeNotifier {
     final s = await auth.login(username: username, password: password);
     session = s;
     await _prefs?.setString(_sessionKey, jsonEncode(s.toJson()));
+    _startRealtime();
     notifyListeners();
   }
 
@@ -83,8 +110,10 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    _stopRealtime();
     session = null;
     await _prefs?.remove(_sessionKey);
+    _unreadByPeer.clear();
     notifyListeners();
   }
 
@@ -103,7 +132,50 @@ class AppState extends ChangeNotifier {
     peers = peers.where((e) => e != peerId).toList();
     await _prefs?.setStringList(
         _peersKey, peers.map((e) => e.toString()).toList());
+    _unreadByPeer.remove(peerId);
     notifyListeners();
+  }
+
+  void _startRealtime() {
+    final s = session;
+    if (s == null) return;
+    _stopRealtime();
+    final rt = RealtimeService(messages, wsBaseUrl: wsBaseUrl);
+    rt.start(
+      userId: s.userId,
+      token: s.token,
+      lastMessageId: _lastMessageId,
+      onMessage: (m) async {
+        if (m.id > _lastMessageId) {
+          _lastMessageId = m.id;
+          await _prefs?.setInt(_lastMsgIdKey, _lastMessageId);
+        }
+        _messageEvents.add(m);
+
+        final myId = s.userId;
+        if (m.receiverId == myId) {
+          await addPeer(m.senderId);
+          if ((m.status ?? '').toUpperCase() != 'READ') {
+            _unreadByPeer[m.senderId] = (_unreadByPeer[m.senderId] ?? 0) + 1;
+            notifyListeners();
+          }
+        }
+      },
+      onError: (_) {},
+    );
+    _realtime = rt;
+  }
+
+  void _stopRealtime() {
+    _realtime?.stop();
+    _realtime = null;
+  }
+
+  @override
+  void dispose() {
+    _stopRealtime();
+    _messageEvents.close();
+    super.dispose();
   }
 
   void _buildServices() {

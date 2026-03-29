@@ -52,6 +52,7 @@ class MessageService {
     required int senderId,
     required int receiverId,
     required int videoResourceId,
+    int? coverResourceId,
   }) async {
     final res = await _api.postJson<Object?>(
       '/api/message/send',
@@ -59,6 +60,7 @@ class MessageService {
         'senderId': senderId,
         'receiverId': receiverId,
         'type': 'VIDEO',
+        if (coverResourceId != null) 'resourceId': coverResourceId,
         'videoResourceId': videoResourceId,
       },
       decode: (raw) => raw,

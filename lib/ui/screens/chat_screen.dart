@@ -1,14 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dynamic_photo_chat_flutter/models/file_upload_response.dart';
 import 'package:dynamic_photo_chat_flutter/models/message.dart';
-import 'package:dynamic_photo_chat_flutter/services/realtime_service.dart';
 import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
 import 'package:dynamic_photo_chat_flutter/ui/screens/video_player_screen.dart';
 import 'package:dynamic_photo_chat_flutter/ui/widgets/message_bubble.dart';
-import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
+import 'package:dynamic_photo_chat_flutter/utils/live_photo_detector.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:photo_manager/photo_manager.dart';
 import 'package:provider/provider.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -23,9 +24,11 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _textCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
+  final ImagePicker _picker = ImagePicker();
 
   final List<ChatMessage> _messages = [];
-  RealtimeService? _realtime;
+  final Set<int> _coverRefreshing = <int>{};
+  StreamSubscription<ChatMessage>? _msgSub;
   bool _loading = true;
   bool _sending = false;
   String? _error;
@@ -39,7 +42,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
-    _realtime?.stop();
+    _msgSub?.cancel();
+    _msgSub = null;
     _textCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -58,9 +62,10 @@ class _ChatScreenState extends State<ChatScreen> {
           ? 0
           : _messages.map((e) => e.id).reduce((a, b) => a > b ? a : b);
       await _markAllRead(session.userId);
-      _startRealtime();
+      state.clearUnread(widget.peerId);
+      _subscribeToEvents(state, session.userId);
     } catch (e) {
-      _error = e.toString();
+      _error = _toUserError(e);
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -69,31 +74,45 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _startRealtime() {
-    final state = context.read<AppState>();
-    final session = state.session!;
-    final rt = RealtimeService(state.messages, wsBaseUrl: state.wsBaseUrl);
-    rt.start(
-      userId: session.userId,
-      token: session.token,
-      lastMessageId: _lastMessageId,
-      onMessage: (m) async {
-        if (m.id > _lastMessageId) _lastMessageId = m.id;
-        if (m.senderId != widget.peerId) return;
-        if (_messages.any((e) => e.id == m.id)) return;
-        setState(() {
+  void _subscribeToEvents(AppState state, int myId) {
+    _msgSub?.cancel();
+    _msgSub = state.messageEvents.listen((m) async {
+      if (!mounted) return;
+      if (m.id > _lastMessageId) _lastMessageId = m.id;
+      final isInThisChat =
+          (m.senderId == widget.peerId && m.receiverId == myId) ||
+              (m.senderId == myId && m.receiverId == widget.peerId);
+      if (!isInThisChat) return;
+      final idx = _messages.indexWhere((e) => e.id == m.id);
+      setState(() {
+        if (idx >= 0) {
+          _messages[idx] = m;
+        } else {
           _messages.add(m);
-          _messages.sort((a, b) => a.id.compareTo(b.id));
-        });
-        await _markAllRead(session.userId);
-        _scrollToBottom();
-      },
-      onError: (e) {
-        if (!mounted) return;
-        setState(() => _error = e.toString());
-      },
-    );
-    _realtime = rt;
+        }
+        _messages.sort((a, b) => a.id.compareTo(b.id));
+      });
+      _maybeRefreshVideoCover(m);
+      if (m.senderId == widget.peerId) {
+        state.clearUnread(widget.peerId);
+        await _markAllRead(myId);
+      }
+      _scrollToBottom();
+    }, onError: (e) {
+      if (!mounted) return;
+      setState(() => _error = _toUserError(e));
+    });
+  }
+
+  String _toUserError(Object e) {
+    final raw = e.toString();
+    final lower = raw.toLowerCase();
+    if (lower.contains('socketexception') ||
+        lower.contains('connection refused') ||
+        lower.contains('network')) {
+      return '连接失败，请在登录页右上角设置API地址为电脑局域网IP（例如 http://192.168.x.x:8080）';
+    }
+    return raw;
   }
 
   Future<void> _markAllRead(int myId) async {
@@ -128,11 +147,16 @@ class _ChatScreenState extends State<ChatScreen> {
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollCtrl.hasClients) return;
-      _scrollCtrl.animateTo(
-        _scrollCtrl.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
-      );
+      final max = _scrollCtrl.position.maxScrollExtent;
+      _scrollCtrl.jumpTo(max);
+      Future<void>.delayed(const Duration(milliseconds: 120), () {
+        if (!_scrollCtrl.hasClients) return;
+        _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+      });
+      Future<void>.delayed(const Duration(milliseconds: 320), () {
+        if (!_scrollCtrl.hasClients) return;
+        _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+      });
     });
   }
 
@@ -173,28 +197,155 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _pickAndUploadNormal() async {
-    final result = await FilePicker.platform.pickFiles(
-      allowMultiple: false,
-      withData: kIsWeb,
-      type: FileType.custom,
-      allowedExtensions: const ['jpg', 'jpeg', 'png', 'heic', 'mp4', 'mov'],
+  Future<void> _pickFromGallery() async {
+    if (_sending) return;
+
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_library),
+                title: const Text('选择照片'),
+                onTap: () => Navigator.of(ctx).pop('image'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.video_library),
+                title: const Text('选择视频'),
+                onTap: () => Navigator.of(ctx).pop('video'),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
     );
-    if (result == null || result.files.isEmpty) return;
-    if (!mounted) return;
-    final state = context.read<AppState>();
-    final session = state.session!;
+
+    if (result == null || !mounted) return;
+
     setState(() => _sending = true);
     try {
-      final uploaded = await state.files
-          .uploadNormal(file: result.files.first, userId: session.userId);
-      await _sendForUploadedNormal(uploaded, session.userId);
+      if (result == 'image') {
+        await _pickImage();
+      } else {
+        await _pickVideo();
+      }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('上传失败: $e')),
+      );
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  Future<void> _pickImage() async {
+    final PermissionState ps = await PhotoManager.requestPermissionExtend();
+    if (!ps.isAuth) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('需要相册权限')),
+      );
+      return;
+    }
+
+    final XFile? image = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+    if (image == null || !mounted) return;
+
+    final state = context.read<AppState>();
+    final session = state.session!;
+
+    try {
+      final List<AssetPathEntity> paths = await PhotoManager.getAssetPathList(
+        type: RequestType.image,
+      );
+
+      AssetEntity? selectedAsset;
+      for (final path in paths) {
+        final assets = await path.getAssetListRange(start: 0, end: 1000);
+        for (final asset in assets) {
+          final file = await asset.file;
+          if (file?.path == image.path) {
+            selectedAsset = asset;
+            break;
+          }
+        }
+        if (selectedAsset != null) break;
+      }
+
+      FileUploadResponse uploaded;
+
+      if (selectedAsset != null && Platform.isIOS) {
+        final livePhotoInfo =
+            await LivePhotoDetector.detectLivePhoto(selectedAsset);
+        if (livePhotoInfo != null) {
+          uploaded = await state.files.uploadLivePhotoAuto(
+            jpegPath: livePhotoInfo.imagePath,
+            movPath: livePhotoInfo.videoPath,
+            userId: session.userId,
+          );
+          await _sendForDynamic(uploaded, session.userId);
+          return;
+        }
+      }
+
+      if (selectedAsset != null && Platform.isAndroid) {
+        final isMotionPhoto =
+            await LivePhotoDetector.detectMotionPhoto(selectedAsset);
+        if (isMotionPhoto) {
+          uploaded = await state.files.uploadMotionPhotoFromPath(
+            filePath: image.path,
+            userId: session.userId,
+          );
+          await _sendForDynamic(uploaded, session.userId);
+          return;
+        }
+      }
+
+      uploaded = await state.files.uploadNormalFromXFile(
+        file: image,
+        userId: session.userId,
+      );
+      await _sendForUploadedNormal(uploaded, session.userId);
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  Future<void> _pickVideo() async {
+    final PermissionState ps = await PhotoManager.requestPermissionExtend();
+    if (!ps.isAuth) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('需要相册权限')),
+      );
+      return;
+    }
+
+    final XFile? video = await _picker.pickVideo(
+      source: ImageSource.gallery,
+    );
+    if (video == null || !mounted) return;
+
+    final state = context.read<AppState>();
+    final session = state.session!;
+
+    try {
+      final uploaded = await state.files.uploadNormalFromXFile(
+        file: video,
+        userId: session.userId,
+      );
+      await _sendForUploadedNormal(uploaded, session.userId);
+    } catch (e) {
+      rethrow;
     }
   }
 
@@ -231,6 +382,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final mid = await state.messages.sendVideo(
         senderId: myId,
         receiverId: widget.peerId,
+        coverResourceId: uploaded.coverId,
         videoResourceId: uploaded.fileId!);
     final msg = ChatMessage(
       id: mid,
@@ -238,74 +390,16 @@ class _ChatScreenState extends State<ChatScreen> {
       receiverId: widget.peerId,
       type: 'VIDEO',
       content: null,
-      resourceId: null,
+      resourceId: uploaded.coverId,
       videoResourceId: uploaded.fileId,
-      coverUrl: null,
+      coverUrl: uploaded.coverUrl,
       videoUrl: uploaded.url,
       status: 'SENT',
       createdAt: DateTime.now(),
     );
     setState(() => _messages.add(msg));
+    _maybeRefreshVideoCover(msg);
     _scrollToBottom();
-  }
-
-  Future<void> _pickAndUploadLivePhoto() async {
-    final jpegPick = await FilePicker.platform.pickFiles(
-      allowMultiple: false,
-      withData: kIsWeb,
-      type: FileType.custom,
-      allowedExtensions: const ['jpg', 'jpeg'],
-    );
-    if (jpegPick == null || jpegPick.files.isEmpty) return;
-    final movPick = await FilePicker.platform.pickFiles(
-      allowMultiple: false,
-      withData: kIsWeb,
-      type: FileType.custom,
-      allowedExtensions: const ['mov', 'mp4'],
-    );
-    if (movPick == null || movPick.files.isEmpty) return;
-    if (!mounted) return;
-    final state = context.read<AppState>();
-    final session = state.session!;
-    setState(() => _sending = true);
-    try {
-      final uploaded = await state.files.uploadLivePhoto(
-          jpeg: jpegPick.files.first,
-          mov: movPick.files.first,
-          userId: session.userId);
-      await _sendForDynamic(uploaded, session.userId);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
-
-  Future<void> _pickAndUploadMotionPhoto() async {
-    final pick = await FilePicker.platform.pickFiles(
-      allowMultiple: false,
-      withData: kIsWeb,
-      type: FileType.custom,
-      allowedExtensions: const ['jpg', 'jpeg'],
-    );
-    if (pick == null || pick.files.isEmpty) return;
-    if (!mounted) return;
-    final state = context.read<AppState>();
-    final session = state.session!;
-    setState(() => _sending = true);
-    try {
-      final uploaded = await state.files
-          .uploadMotionPhoto(file: pick.files.first, userId: session.userId);
-      await _sendForDynamic(uploaded, session.userId);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
   }
 
   Future<void> _sendForDynamic(FileUploadResponse uploaded, int myId) async {
@@ -337,47 +431,95 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
   }
 
+  void _maybeRefreshVideoCover(ChatMessage m) {
+    if (m.id <= 0) return;
+    if ((m.type).toUpperCase() != 'VIDEO') return;
+    if (m.coverUrl != null && m.coverUrl!.isNotEmpty) return;
+    final coverId = m.resourceId;
+    if (coverId == null) return;
+    if (_coverRefreshing.contains(m.id)) return;
+    _coverRefreshing.add(m.id);
+    _refreshVideoCover(messageId: m.id, coverId: coverId).whenComplete(() {
+      _coverRefreshing.remove(m.id);
+    });
+  }
+
+  Future<void> _refreshVideoCover({required int messageId, required int coverId}) async {
+    final state = context.read<AppState>();
+    for (var i = 0; i < 20; i++) {
+      await Future<void>.delayed(const Duration(seconds: 2));
+      if (!mounted) return;
+      try {
+        final info = await state.files.preview(fileId: coverId);
+        final st = (info.sourceType ?? '').toUpperCase();
+        final url = info.url;
+        if (st != 'VIDEOCOVERPENDING' && url != null && url.isNotEmpty) {
+          final idx = _messages.indexWhere((e) => e.id == messageId);
+          if (idx < 0) return;
+          final bust = DateTime.now().millisecondsSinceEpoch;
+          final sep = url.contains('?') ? '&' : '?';
+          final resolved = '$url${sep}t=$bust';
+          final old = _messages[idx];
+          setState(() {
+            _messages[idx] = ChatMessage(
+              id: old.id,
+              senderId: old.senderId,
+              receiverId: old.receiverId,
+              type: old.type,
+              content: old.content,
+              resourceId: old.resourceId,
+              videoResourceId: old.videoResourceId,
+              coverUrl: resolved,
+              videoUrl: old.videoUrl,
+              status: old.status,
+              createdAt: old.createdAt,
+            );
+          });
+          return;
+        }
+      } catch (_) {}
+    }
+  }
+
   void _openPlayer(String url) {
     Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => VideoPlayerScreen(url: url)));
   }
 
-  Future<void> _showAttachMenu() async {
-    if (_sending) return;
-    final action = await showModalBottomSheet<String>(
+  void _openImagePreview(String url) {
+    showDialog<void>(
       context: context,
-      showDragHandle: true,
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.image_outlined),
-                title: const Text('上传图片/视频'),
-                onTap: () => Navigator.of(ctx).pop('normal'),
+      builder: (ctx) => Dialog.fullscreen(
+        child: Stack(
+          children: [
+            Container(
+              color: Colors.black,
+              alignment: Alignment.center,
+              child: InteractiveViewer(
+                minScale: 0.5,
+                maxScale: 4,
+                child: Image.network(
+                  url,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Center(
+                      child: Text('图片加载失败',
+                          style: TextStyle(color: Colors.white))),
+                ),
               ),
-              ListTile(
-                leading: const Icon(Icons.motion_photos_on_outlined),
-                title: const Text('上传 Live Photo (JPEG + MOV/MP4)'),
-                onTap: () => Navigator.of(ctx).pop('live'),
+            ),
+            SafeArea(
+              child: Align(
+                alignment: Alignment.topRight,
+                child: IconButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  icon: const Icon(Icons.close, color: Colors.white),
+                ),
               ),
-              ListTile(
-                leading: const Icon(Icons.motion_photos_auto_outlined),
-                title: const Text('上传 Motion Photo (带XMP的JPEG)'),
-                onTap: () => Navigator.of(ctx).pop('motion'),
-              ),
-              const SizedBox(height: 12),
-            ],
-          ),
-        );
-      },
+            ),
+          ],
+        ),
+      ),
     );
-    if (!mounted) return;
-    if (action == null) return;
-    if (action == 'normal') return _pickAndUploadNormal();
-    if (action == 'live') return _pickAndUploadLivePhoto();
-    if (action == 'motion') return _pickAndUploadMotionPhoto();
   }
 
   @override
@@ -412,6 +554,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           message: m,
                           isMine: isMine,
                           onPlayVideo: _openPlayer,
+                          onPreviewImage: _openImagePreview,
                         ),
                       );
                     },
@@ -424,7 +567,7 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Row(
                 children: [
                   IconButton(
-                    onPressed: _showAttachMenu,
+                    onPressed: _pickFromGallery,
                     icon: const Icon(Icons.add_circle_outline),
                   ),
                   Expanded(
