@@ -29,6 +29,9 @@ class ChatMessage {
   final String? status;
   final DateTime? createdAt;
 
+  String? get resolvedCoverUrl => media?.coverUrl ?? coverUrl;
+  String? get resolvedPlayUrl => media?.playUrl ?? videoUrl;
+
   static ChatMessage fromJson(Object? raw) {
     final json = raw as Map<String, dynamic>;
     return ChatMessage(

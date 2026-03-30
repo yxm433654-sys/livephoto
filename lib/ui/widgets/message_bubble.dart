@@ -117,7 +117,7 @@ class MessageBubble extends StatelessWidget {
       maxMediaHeight: maxMediaHeight,
       aspectRatio: _resolveAspectRatio(media, fallback: 1.0),
     );
-    final url = media?.coverUrl ?? message.coverUrl;
+    final url = message.resolvedCoverUrl;
     return GestureDetector(
       onTap: url == null || url.trim().isEmpty
           ? null
@@ -145,8 +145,8 @@ class MessageBubble extends StatelessWidget {
       maxMediaHeight: maxMediaHeight,
       aspectRatio: _resolveAspectRatio(media, fallback: 16 / 9),
     );
-    final coverUrl = media?.coverUrl ?? message.coverUrl;
-    final videoUrl = media?.playUrl ?? message.videoUrl;
+    final coverUrl = message.resolvedCoverUrl;
+    final videoUrl = message.resolvedPlayUrl;
     final processing = (media?.processingStatus ?? '').toUpperCase() == 'PROCESSING';
 
     return GestureDetector(
@@ -185,8 +185,8 @@ class MessageBubble extends StatelessWidget {
       maxMediaHeight: maxMediaHeight,
       aspectRatio: _resolveAspectRatio(media, fallback: 3 / 4),
     );
-    final coverUrl = media?.coverUrl ?? message.coverUrl;
-    final videoUrl = media?.playUrl ?? message.videoUrl;
+    final coverUrl = message.resolvedCoverUrl;
+    final videoUrl = message.resolvedPlayUrl;
     final processing = (media?.processingStatus ?? '').toUpperCase() == 'PROCESSING';
 
     return GestureDetector(

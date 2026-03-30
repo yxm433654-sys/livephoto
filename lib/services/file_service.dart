@@ -50,76 +50,39 @@ class FileService {
     required PlatformFile file,
     int? userId,
   }) async {
-    return _guard(() async {
-      final req = http.MultipartRequest('POST', _uri('/api/files/upload'));
-      if (userId != null) {
-        req.fields['userId'] = userId.toString();
-      }
-      req.files.add(await _toMultipart(file, 'file'));
-      final streamed = await _http.send(req).timeout(_requestTimeout);
-      final res = await http.Response.fromStream(streamed).timeout(
-        _requestTimeout,
-      );
-      final parsed =
-          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-      final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
-      if (!api.success) {
-        throw Exception(api.message ?? 'Upload failed');
-      }
-      return FileUploadResponse.fromJson(api.data);
-    });
+    return _uploadMultipart(
+      path: '/api/files/upload',
+      userId: userId,
+      files: [await _toMultipart(file, 'file')],
+    );
   }
 
   Future<FileUploadResponse> uploadNormalFromXFile({
     required XFile file,
     int? userId,
   }) async {
-    return _guard(() async {
-      final req = http.MultipartRequest('POST', _uri('/api/files/upload'));
-      if (userId != null) {
-        req.fields['userId'] = userId.toString();
-      }
-      req.files.add(await http.MultipartFile.fromPath(
-        'file',
-        file.path,
-        filename: file.name,
-      ));
-      final streamed = await _http.send(req).timeout(_requestTimeout);
-      final res = await http.Response.fromStream(streamed).timeout(
-        _requestTimeout,
-      );
-      final parsed =
-          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-      final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
-      if (!api.success) {
-        throw Exception(api.message ?? 'Upload failed');
-      }
-      return FileUploadResponse.fromJson(api.data);
-    });
+    return _uploadMultipart(
+      path: '/api/files/upload',
+      userId: userId,
+      files: [
+        await http.MultipartFile.fromPath(
+          'file',
+          file.path,
+          filename: file.name,
+        ),
+      ],
+    );
   }
 
   Future<FileUploadResponse> uploadNormalFromPath({
     required String filePath,
     int? userId,
   }) async {
-    return _guard(() async {
-      final req = http.MultipartRequest('POST', _uri('/api/files/upload'));
-      if (userId != null) {
-        req.fields['userId'] = userId.toString();
-      }
-      req.files.add(await http.MultipartFile.fromPath('file', filePath));
-      final streamed = await _http.send(req).timeout(_requestTimeout);
-      final res = await http.Response.fromStream(streamed).timeout(
-        _requestTimeout,
-      );
-      final parsed =
-          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-      final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
-      if (!api.success) {
-        throw Exception(api.message ?? 'Upload failed');
-      }
-      return FileUploadResponse.fromJson(api.data);
-    });
+    return _uploadMultipart(
+      path: '/api/files/upload',
+      userId: userId,
+      files: [await http.MultipartFile.fromPath('file', filePath)],
+    );
   }
 
   Future<FileUploadResponse> uploadLivePhoto({
@@ -127,26 +90,14 @@ class FileService {
     required PlatformFile mov,
     int? userId,
   }) async {
-    return _guard(() async {
-      final req =
-          http.MultipartRequest('POST', _uri('/api/files/upload/live-photo'));
-      if (userId != null) {
-        req.fields['userId'] = userId.toString();
-      }
-      req.files.add(await _toMultipart(jpeg, 'jpeg'));
-      req.files.add(await _toMultipart(mov, 'mov'));
-      final streamed = await _http.send(req).timeout(_requestTimeout);
-      final res = await http.Response.fromStream(streamed).timeout(
-        _requestTimeout,
-      );
-      final parsed =
-          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-      final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
-      if (!api.success) {
-        throw Exception(api.message ?? 'Upload failed');
-      }
-      return FileUploadResponse.fromJson(api.data);
-    });
+    return _uploadMultipart(
+      path: '/api/files/upload/live-photo',
+      userId: userId,
+      files: [
+        await _toMultipart(jpeg, 'jpeg'),
+        await _toMultipart(mov, 'mov'),
+      ],
+    );
   }
 
   Future<FileUploadResponse> uploadLivePhotoAuto({
@@ -154,64 +105,53 @@ class FileService {
     required String movPath,
     int? userId,
   }) async {
-    return _guard(() async {
-      final req =
-          http.MultipartRequest('POST', _uri('/api/files/upload/live-photo'));
-      if (userId != null) {
-        req.fields['userId'] = userId.toString();
-      }
-      req.files.add(await http.MultipartFile.fromPath('jpeg', jpegPath));
-      req.files.add(await http.MultipartFile.fromPath('mov', movPath));
-      final streamed = await _http.send(req).timeout(_requestTimeout);
-      final res = await http.Response.fromStream(streamed).timeout(
-        _requestTimeout,
-      );
-      final parsed =
-          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-      final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
-      if (!api.success) {
-        throw Exception(api.message ?? 'Upload failed');
-      }
-      return FileUploadResponse.fromJson(api.data);
-    });
+    return _uploadMultipart(
+      path: '/api/files/upload/live-photo',
+      userId: userId,
+      files: [
+        await http.MultipartFile.fromPath('jpeg', jpegPath),
+        await http.MultipartFile.fromPath('mov', movPath),
+      ],
+    );
   }
 
   Future<FileUploadResponse> uploadMotionPhoto({
     required PlatformFile file,
     int? userId,
   }) async {
-    return _guard(() async {
-      final req =
-          http.MultipartRequest('POST', _uri('/api/files/upload/motion-photo'));
-      if (userId != null) {
-        req.fields['userId'] = userId.toString();
-      }
-      req.files.add(await _toMultipart(file, 'file'));
-      final streamed = await _http.send(req).timeout(_requestTimeout);
-      final res = await http.Response.fromStream(streamed).timeout(
-        _requestTimeout,
-      );
-      final parsed =
-          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-      final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
-      if (!api.success) {
-        throw Exception(api.message ?? 'Upload failed');
-      }
-      return FileUploadResponse.fromJson(api.data);
-    });
+    return _uploadMultipart(
+      path: '/api/files/upload/motion-photo',
+      userId: userId,
+      files: [await _toMultipart(file, 'file')],
+    );
   }
 
   Future<FileUploadResponse> uploadMotionPhotoFromPath({
     required String filePath,
     int? userId,
   }) async {
+    return _uploadMultipart(
+      path: '/api/files/upload/motion-photo',
+      userId: userId,
+      files: [await http.MultipartFile.fromPath('file', filePath)],
+    );
+  }
+
+  Future<FileUploadResponse> _uploadMultipart({
+    required String path,
+    required List<http.MultipartFile> files,
+    int? userId,
+    Map<String, String>? fields,
+  }) async {
     return _guard(() async {
-      final req =
-          http.MultipartRequest('POST', _uri('/api/files/upload/motion-photo'));
+      final req = http.MultipartRequest('POST', _uri(path));
       if (userId != null) {
         req.fields['userId'] = userId.toString();
       }
-      req.files.add(await http.MultipartFile.fromPath('file', filePath));
+      if (fields != null) {
+        req.fields.addAll(fields);
+      }
+      req.files.addAll(files);
       final streamed = await _http.send(req).timeout(_requestTimeout);
       final res = await http.Response.fromStream(streamed).timeout(
         _requestTimeout,
