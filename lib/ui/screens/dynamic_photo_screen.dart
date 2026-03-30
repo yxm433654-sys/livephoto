@@ -1,6 +1,5 @@
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:dynamic_photo_chat_flutter/utils/media_downloader.dart';
+import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 class DynamicPhotoScreen extends StatefulWidget {
@@ -21,13 +20,10 @@ class DynamicPhotoScreen extends StatefulWidget {
 
 class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
   VideoPlayerController? _controller;
+  bool _loading = false;
   bool _showVideo = false;
-  bool _holding = false;
-  bool _initing = false;
   String? _error;
   double _aspectRatio = 3 / 4;
-  bool _downloading = false;
-  bool _downloadStarted = false;
   int _received = 0;
   int? _total;
 
@@ -39,203 +35,258 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
 
   Future<void> _ensureController() async {
     if (_controller != null) return;
-    final downloaded = await MediaDownloader.downloadToCacheFile(
-      url: widget.videoUrl,
-      extensionHint: 'mp4',
-      onProgress: (r, t) {
-        if (!mounted) return;
-        setState(() {
-          _received = r;
-          _total = t;
-        });
-      },
-    );
-    if (!mounted) return;
-    setState(() => _downloading = false);
-    final c = VideoPlayerController.file(downloaded.file);
-    _controller = c;
-    c.addListener(_onTick);
-    await c.initialize();
-    final ar = c.value.aspectRatio;
-    if (ar > 0 && ar.isFinite && mounted) {
-      setState(() => _aspectRatio = ar);
-    }
-    await c.setLooping(false);
-    await c.setVolume(0);
-  }
 
-  void _onTick() {
-    final c = _controller;
-    if (c == null) return;
-    final v = c.value;
-    if (!v.isInitialized) return;
-    if (!v.isPlaying) return;
-    final d = v.duration;
-    if (d == Duration.zero) return;
-    if (v.position + const Duration(milliseconds: 80) < d) return;
-    _endPlayback();
-  }
+    setState(() {
+      _loading = true;
+      _error = null;
+      _received = 0;
+      _total = null;
+    });
 
-  Future<void> _startPlayback() async {
-    if (_holding) return;
-    _holding = true;
-    if (_initing) return;
-    _initing = true;
     try {
-      await HapticFeedback.selectionClick();
-      if (mounted && _controller == null) {
-        setState(() {
-          _downloadStarted = true;
-          _downloading = true;
-          _received = 0;
-          _total = null;
-        });
+      final downloaded = await MediaDownloader.downloadToCacheFile(
+        url: widget.videoUrl,
+        extensionHint: 'mp4',
+        onProgress: (received, total) {
+          if (!mounted) return;
+          setState(() {
+            _received = received;
+            _total = total;
+          });
+        },
+      );
+
+      final controller = VideoPlayerController.file(downloaded.file);
+      await controller.initialize();
+      await controller.setLooping(true);
+      controller.addListener(_syncPlaybackState);
+
+      final ratio = controller.value.aspectRatio;
+      if (ratio.isFinite && ratio > 0) {
+        _aspectRatio = ratio;
       }
-      await _ensureController();
-      if (!mounted) return;
-      // 初始化过程中如果用户松手，则不继续 seek/play。
-      if (!_holding) return;
-      final c = _controller;
-      if (c == null) return;
-      await c.seekTo(Duration.zero);
-      await c.play();
-      if (!mounted) return;
-      setState(() => _showVideo = true);
+
+      _controller = controller;
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      _error = e.toString();
     } finally {
       if (mounted) {
-        setState(() => _downloading = false);
+        setState(() => _loading = false);
       }
-      _initing = false;
     }
   }
 
-  Future<void> _stopPlayback() async {
-    _holding = false;
-    final c = _controller;
-    // 先淡出视频层，减少“按住/松手”时的突兀感。
-    if (mounted) setState(() => _showVideo = false);
-    if (c == null) {
+  void _syncPlaybackState() {
+    final controller = _controller;
+    if (controller == null || !mounted) return;
+    final isPlaying = controller.value.isPlaying;
+    if (_showVideo != isPlaying) {
+      setState(() => _showVideo = isPlaying);
+    }
+  }
+
+  Future<void> _togglePlayback() async {
+    await _ensureController();
+    final controller = _controller;
+    if (controller == null) return;
+
+    if (controller.value.isPlaying) {
+      await controller.pause();
+      if (mounted) {
+        setState(() => _showVideo = false);
+      }
       return;
     }
-    try {
-      await c.pause();
-      await c.seekTo(Duration.zero);
-    } catch (_) {}
-  }
 
-  Future<void> _endPlayback() async {
-    if (!_showVideo) return;
-    final c = _controller;
-    if (c == null) return;
-    try {
-      await c.pause();
-      await c.seekTo(Duration.zero);
-    } catch (_) {}
-    if (mounted) setState(() => _showVideo = false);
+    await controller.seekTo(Duration.zero);
+    await controller.play();
+    if (mounted) {
+      setState(() => _showVideo = true);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final c = _controller;
-    final hasVideo = _showVideo && c != null && c.value.isInitialized;
+    final controller = _controller;
+    final showVideoLayer =
+        _showVideo && controller != null && controller.value.isInitialized;
     final progress = (_total == null || _total == 0)
         ? null
         : (_received / _total!).clamp(0.0, 1.0);
+    final hasCover = widget.coverUrl.trim().isNotEmpty;
+
     return Scaffold(
-      appBar: AppBar(title: Text(widget.title ?? '实况照片')),
-      body: Center(
-        child: _error != null
-            ? Text(_error!)
-            : GestureDetector(
-                onLongPressStart: (_) => _startPlayback(),
-                onLongPressEnd: (_) => _stopPlayback(),
-                onLongPressCancel: _stopPlayback,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxWidth: MediaQuery.of(context).size.width - 24,
-                      maxHeight: MediaQuery.of(context).size.height - 140,
-                    ),
-                    child: AspectRatio(
-                      aspectRatio: _aspectRatio,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          Image.network(
-                            widget.coverUrl,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) =>
-                                const ColoredBox(color: Colors.black12),
-                          ),
-                          if (_downloadStarted && _downloading)
-                            Positioned.fill(
-                              child: Container(
-                                color: Colors.black.withOpacity(0.15),
-                                alignment: Alignment.center,
-                                child: SizedBox(
-                                  width: 240,
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      LinearProgressIndicator(value: progress),
-                                      const SizedBox(height: 10),
-                                      Text(
-                                        progress == null
-                                            ? '正在下载视频...'
-                                            : '正在下载视频... ${(progress * 100).round()}%',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 6),
-                                      const Text(
-                                        '下载完成后长按播放',
-                                        style: TextStyle(
-                                          color: Colors.white70,
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
+      backgroundColor: const Color(0xFF050816),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        foregroundColor: Colors.white,
+        title: Text(widget.title ?? 'Live Photo'),
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          child: Column(
+            children: [
+              Expanded(
+                child: Center(
+                  child: GestureDetector(
+                    onTap: _togglePlayback,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(24),
+                      child: AspectRatio(
+                        aspectRatio: _aspectRatio,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            const DecoratedBox(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                  colors: [
+                                    Color(0xFF111827),
+                                    Color(0xFF1D4ED8),
+                                    Color(0xFF0F172A),
+                                  ],
                                 ),
                               ),
                             ),
-                          if (c != null && c.value.isInitialized)
-                            Positioned.fill(
-                              child: AnimatedOpacity(
-                                duration:
-                                    const Duration(milliseconds: 180),
-                                opacity: hasVideo ? 1.0 : 0.0,
-                                child: AnimatedScale(
-                                  duration:
-                                      const Duration(milliseconds: 180),
-                                  scale: hasVideo ? 1.02 : 1.0,
-                                  child: FittedBox(
-                                    fit: BoxFit.cover,
-                                    child: SizedBox(
-                                      width: c.value.size.width,
-                                      height: c.value.size.height,
-                                      child: VideoPlayer(c),
+                            if (hasCover)
+                              Image.network(
+                                widget.coverUrl,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) =>
+                                    const SizedBox.shrink(),
+                              ),
+                            if (showVideoLayer)
+                              FittedBox(
+                                fit: BoxFit.cover,
+                                child: SizedBox(
+                                  width: controller.value.size.width,
+                                  height: controller.value.size.height,
+                                  child: VideoPlayer(controller),
+                                ),
+                              ),
+                            Container(
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  begin: Alignment.topCenter,
+                                  end: Alignment.bottomCenter,
+                                  colors: [
+                                    Colors.black.withOpacity(0.12),
+                                    Colors.black.withOpacity(0.28),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const Positioned(
+                              left: 14,
+                              top: 14,
+                              child: _LiveBadge(),
+                            ),
+                            if (_loading)
+                              Positioned.fill(
+                                child: Container(
+                                  color: Colors.black.withOpacity(0.22),
+                                  alignment: Alignment.center,
+                                  child: SizedBox(
+                                    width: 220,
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        LinearProgressIndicator(value: progress),
+                                        const SizedBox(height: 12),
+                                        Text(
+                                          progress == null
+                                              ? 'Preparing video...'
+                                              : 'Preparing video... ${(progress * 100).round()}%',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ),
                               ),
+                            if (_error != null)
+                              Positioned.fill(
+                                child: Container(
+                                  color: Colors.black.withOpacity(0.35),
+                                  alignment: Alignment.center,
+                                  padding: const EdgeInsets.all(24),
+                                  child: Text(
+                                    _error!,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(color: Colors.white),
+                                  ),
+                                ),
+                              ),
+                            Align(
+                              alignment: Alignment.center,
+                              child: AnimatedOpacity(
+                                duration: const Duration(milliseconds: 180),
+                                opacity: _loading ? 0.0 : 1.0,
+                                child: Container(
+                                  width: 68,
+                                  height: 68,
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.34),
+                                    shape: BoxShape.circle,
+                                    border: Border.all(
+                                      color: Colors.white.withOpacity(0.2),
+                                    ),
+                                  ),
+                                  child: Icon(
+                                    showVideoLayer ? Icons.pause : Icons.play_arrow,
+                                    color: Colors.white,
+                                    size: 36,
+                                  ),
+                                ),
+                              ),
                             ),
-                          const Positioned(
-                            right: 10,
-                            top: 10,
-                            child: _LiveBadge(),
-                          ),
-                        ],
+                            const Positioned(
+                              left: 18,
+                              right: 18,
+                              bottom: 18,
+                              child: Text(
+                                'Tap to preview the motion. Tap again to pause.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
+              const SizedBox(height: 16),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.06),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: Colors.white.withOpacity(0.08)),
+                ),
+                child: const Text(
+                  'If the cover is still processing, the placeholder stays visible until the video is ready.',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    height: 1.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -40,11 +40,10 @@ class MessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final mq = MediaQuery.of(context);
-    final screenW = mq.size.width;
-    final screenH = mq.size.height;
-    final mediaWidth = math.min(screenW * 0.48, 240.0);
-    final maxMediaHeight = math.min(screenH * 0.36, mediaWidth * 1.75);
+    final mediaWidth = math.min(MediaQuery.of(context).size.width * 0.5, 240.0);
+    final maxMediaHeight =
+        math.min(MediaQuery.of(context).size.height * 0.36, 260.0);
+    final bubble = _buildContent(context, mediaWidth, maxMediaHeight);
     final time = message.createdAt == null
         ? ''
         : DateFormat('HH:mm').format(message.createdAt!.toLocal());
@@ -55,258 +54,143 @@ class MessageBubble extends StatelessWidget {
       seed: message.senderId,
     );
 
-    final bubble = _content(context, mediaWidth, maxMediaHeight);
-
-    final row = Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      mainAxisAlignment:
-          isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
-      children: isMine
-          ? [
-              Text(time,
-                  style:
-                      const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-              const SizedBox(width: 6),
-              bubble,
-              const SizedBox(width: 8),
-              avatar,
-            ]
-          : [
-              avatar,
-              const SizedBox(width: 8),
-              bubble,
-              const SizedBox(width: 6),
-              Text(time,
-                  style:
-                      const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF))),
-            ],
-    );
-
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: ConstrainedBox(
-        constraints:
-            BoxConstraints(maxWidth: MediaQuery.of(context).size.width),
-        child: row,
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        mainAxisAlignment:
+            isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
+        children: isMine
+            ? [
+                Text(
+                  time,
+                  style:
+                      const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+                ),
+                const SizedBox(width: 6),
+                bubble,
+                const SizedBox(width: 8),
+                avatar,
+              ]
+            : [
+                avatar,
+                const SizedBox(width: 8),
+                bubble,
+                const SizedBox(width: 6),
+                Text(
+                  time,
+                  style:
+                      const TextStyle(fontSize: 11, color: Color(0xFF9CA3AF)),
+                ),
+              ],
       ),
     );
   }
 
-  Widget _content(
-      BuildContext context, double mediaWidth, double maxMediaHeight) {
-    final dpr = MediaQuery.of(context).devicePixelRatio;
-    final cacheW = math.max(1, (mediaWidth * dpr).round());
-    final t = message.type.toUpperCase();
+  Widget _buildContent(
+    BuildContext context,
+    double mediaWidth,
+    double maxMediaHeight,
+  ) {
+    final type = message.type.toUpperCase();
     final media = message.media;
 
-    if (t == 'TEXT') {
+    if (type == 'TEXT') {
       return _TextBubble(text: message.content ?? '', isMine: isMine);
     }
 
-    if (t == 'IMAGE') {
-      final localBytes = localCoverBytes;
-      final localPath = localCoverPath;
-      if (localBytes != null) {
-        return GestureDetector(
-          onTap: () {},
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: mediaWidth,
-                maxHeight: maxMediaHeight,
-              ),
-              child: Image.memory(localBytes, fit: BoxFit.cover),
-            ),
-          ),
-        );
-      }
-      if (localPath != null && localPath.trim().isNotEmpty) {
-        return GestureDetector(
-          onTap: () {},
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: mediaWidth,
-                maxHeight: maxMediaHeight,
-              ),
-              child: Image.file(File(localPath), fit: BoxFit.cover),
-            ),
-          ),
-        );
-      }
-
-      final url = media?.coverUrl ?? message.coverUrl;
-      if (url == null || url.trim().isEmpty) return const Text('图片不可用');
-      final resolved = _resolveUrl(context, url);
-      return GestureDetector(
-        onTap: () => onPreviewImage(resolved),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: mediaWidth,
-              maxHeight: maxMediaHeight,
-            ),
-            child: _networkImage(
-              url: resolved,
-              cacheWidth: cacheW,
-            ),
-          ),
-        ),
-      );
+    if (type == 'IMAGE') {
+      return _buildImageBubble(context, mediaWidth, maxMediaHeight, media);
     }
 
-    if (t == 'VIDEO') {
-      final video = media?.playUrl ?? message.videoUrl;
-      final cover = media?.coverUrl ?? message.coverUrl;
-      if ((video == null || video.isEmpty) &&
-          (cover == null || cover.isEmpty)) {
-        return const Text('视频不可用');
-      }
-
-      ImageProvider? localProvider;
-      if (localCoverBytes != null) {
-        localProvider = MemoryImage(localCoverBytes!);
-      } else if (localCoverPath != null && localCoverPath!.trim().isNotEmpty) {
-        localProvider = FileImage(File(localCoverPath!));
-      }
-
-      return _videoPreview(
-        mediaWidth: mediaWidth,
-        maxMediaHeight: maxMediaHeight,
-        videoUrl: video == null || video.isEmpty ? null : _resolveUrl(context, video),
-        coverUrl: localProvider != null
-            ? null
-            : (cover == null || cover.trim().isEmpty
-                ? null
-                : _resolveUrl(context, cover)),
-        localCoverProvider: localProvider,
-        processingStatus: media?.processingStatus,
-        aspectRatio: _resolveAspectRatio(media, fallback: 9 / 16),
-      );
+    if (type == 'VIDEO') {
+      return _buildVideoBubble(context, mediaWidth, maxMediaHeight, media);
     }
 
-    if (t == 'DYNAMIC_PHOTO') {
-      final cover = media?.coverUrl ?? message.coverUrl;
-      final video = media?.playUrl ?? message.videoUrl;
-      final processingStatus = media?.processingStatus;
-
-      Widget coverWidget;
-      if (localCoverBytes != null) {
-        coverWidget = Image.memory(localCoverBytes!, fit: BoxFit.cover);
-      } else if (localCoverPath != null && localCoverPath!.trim().isNotEmpty) {
-        coverWidget = Image.file(File(localCoverPath!), fit: BoxFit.cover);
-      } else if (cover != null && cover.trim().isNotEmpty) {
-        coverWidget = _networkImage(
-          url: _resolveUrl(context, cover),
-          cacheWidth: cacheW,
-        );
-      } else {
-        coverWidget = _mediaPlaceholder(
-          mediaWidth: mediaWidth,
-          maxMediaHeight: maxMediaHeight,
-          aspectRatio: _resolveAspectRatio(media, fallback: 3 / 4),
-        );
-      }
-
-      final resolvedVideo = (video == null || video.trim().isEmpty)
-          ? null
-          : _resolveUrl(context, video);
-
-      return GestureDetector(
-        onTap: resolvedVideo == null
-            ? null
-            : () {
-                final resolvedCover = (cover == null || cover.trim().isEmpty)
-                    ? ''
-                    : _resolveUrl(context, cover);
-                onOpenDynamicPhoto(resolvedCover, resolvedVideo);
-              },
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: mediaWidth,
-              maxHeight: maxMediaHeight,
-            ),
-            child: Stack(
-              clipBehavior: Clip.hardEdge,
-              alignment: Alignment.center,
-              children: [
-                coverWidget,
-                if ((processingStatus ?? '').toUpperCase() == 'PROCESSING')
-                  _statusOverlay('处理中'),
-                const Positioned(
-                  right: 8,
-                  top: 8,
-                  child: _LiveBadge(),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
+    if (type == 'DYNAMIC_PHOTO') {
+      return _buildDynamicBubble(context, mediaWidth, maxMediaHeight, media);
     }
 
-    return Text(message.content ?? t);
+    return _TextBubble(text: message.content ?? type, isMine: isMine);
   }
 
-  Widget _videoPreview({
-    required double mediaWidth,
-    required double maxMediaHeight,
-    required String? videoUrl,
-    required String? coverUrl,
-    required ImageProvider? localCoverProvider,
-    required String? processingStatus,
-    required double aspectRatio,
-  }) {
+  Widget _buildImageBubble(
+    BuildContext context,
+    double mediaWidth,
+    double maxMediaHeight,
+    ChatMedia? media,
+  ) {
+    final aspectRatio = _resolveAspectRatio(media, fallback: 1.0);
+    final size = _mediaFrameSize(
+      mediaWidth: mediaWidth,
+      maxMediaHeight: maxMediaHeight,
+      aspectRatio: aspectRatio,
+    );
+    final imageUrl = media?.coverUrl ?? message.coverUrl;
+
     return GestureDetector(
-      onTap: videoUrl == null ? null : () => onPlayVideo(videoUrl),
+      onTap: imageUrl == null || imageUrl.trim().isEmpty
+          ? null
+          : () => onPreviewImage(_resolveUrl(context, imageUrl)),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxWidth: mediaWidth,
-            maxHeight: maxMediaHeight,
+        borderRadius: BorderRadius.circular(12),
+        child: SizedBox(
+          width: size.width,
+          height: size.height,
+          child: _mediaSurface(
+            child: _buildPreviewImage(
+              context: context,
+              url: imageUrl,
+              fit: BoxFit.cover,
+            ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVideoBubble(
+    BuildContext context,
+    double mediaWidth,
+    double maxMediaHeight,
+    ChatMedia? media,
+  ) {
+    final aspectRatio = _resolveAspectRatio(media, fallback: 16 / 9);
+    final size = _mediaFrameSize(
+      mediaWidth: mediaWidth,
+      maxMediaHeight: maxMediaHeight,
+      aspectRatio: aspectRatio,
+    );
+    final videoUrl = media?.playUrl ?? message.videoUrl;
+
+    return GestureDetector(
+      onTap: videoUrl == null || videoUrl.trim().isEmpty
+          ? null
+          : () => onPlayVideo(_resolveUrl(context, videoUrl)),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: SizedBox(
+          width: size.width,
+          height: size.height,
           child: Stack(
-            clipBehavior: Clip.hardEdge,
-            alignment: Alignment.center,
+            fit: StackFit.expand,
             children: [
-              if (localCoverProvider != null)
-                Image(
-                  image: localCoverProvider,
+              _mediaSurface(
+                child: _buildPreviewImage(
+                  context: context,
+                  url: media?.coverUrl ?? message.coverUrl,
                   fit: BoxFit.cover,
-                  width: double.infinity,
-                  height: double.infinity,
-                )
-              else if (coverUrl == null)
-                _mediaPlaceholder(
-                  mediaWidth: mediaWidth,
-                  maxMediaHeight: maxMediaHeight,
-                  aspectRatio: aspectRatio,
-                )
-              else
-                _networkImage(
-                  url: coverUrl,
-                  cacheWidth: mediaWidth.round(),
-                ),
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.35),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.play_arrow,
-                      color: Colors.white, size: 28),
                 ),
               ),
-              if ((processingStatus ?? '').toUpperCase() == 'PROCESSING')
-                Positioned(bottom: 8, child: _pill('处理中')),
+              _buildDarkOverlay(),
+              const Center(child: _PlayButton()),
+              if ((media?.processingStatus ?? '').toUpperCase() == 'PROCESSING')
+                const Positioned(
+                  left: 10,
+                  right: 10,
+                  bottom: 10,
+                  child: _StatusPill(text: 'Processing'),
+                ),
             ],
           ),
         ),
@@ -314,70 +198,132 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  Widget _networkImage({
-    required String url,
-    required int cacheWidth,
-  }) {
-    return CachedNetworkImage(
-      imageUrl: url,
-      memCacheWidth: cacheWidth,
-      fadeInDuration: const Duration(milliseconds: 120),
-      fadeOutDuration: const Duration(milliseconds: 120),
-      imageBuilder: (context, imageProvider) => Image(
-        image: imageProvider,
-        fit: BoxFit.contain,
-        alignment: Alignment.center,
-        filterQuality: FilterQuality.low,
+  Widget _buildDynamicBubble(
+    BuildContext context,
+    double mediaWidth,
+    double maxMediaHeight,
+    ChatMedia? media,
+  ) {
+    final aspectRatio = _resolveAspectRatio(media, fallback: 3 / 4);
+    final size = _mediaFrameSize(
+      mediaWidth: mediaWidth,
+      maxMediaHeight: maxMediaHeight,
+      aspectRatio: aspectRatio,
+    );
+    final coverUrl = media?.coverUrl ?? message.coverUrl;
+    final videoUrl = media?.playUrl ?? message.videoUrl;
+
+    return GestureDetector(
+      onTap: videoUrl == null || videoUrl.trim().isEmpty
+          ? null
+          : () => onOpenDynamicPhoto(
+                coverUrl == null || coverUrl.trim().isEmpty
+                    ? ''
+                    : _resolveUrl(context, coverUrl),
+                _resolveUrl(context, videoUrl),
+              ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: SizedBox(
+          width: size.width,
+          height: size.height,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _mediaSurface(
+                child: _buildPreviewImage(
+                  context: context,
+                  url: coverUrl,
+                  fit: BoxFit.cover,
+                ),
+              ),
+              _buildDarkOverlay(),
+              const Positioned(
+                left: 10,
+                top: 10,
+                child: _LiveBadge(),
+              ),
+              if ((media?.processingStatus ?? '').toUpperCase() == 'PROCESSING')
+                const Center(
+                  child: _StatusPill(text: 'Preparing'),
+                )
+              else
+                const Center(child: _PlayButton()),
+            ],
+          ),
+        ),
       ),
-      placeholder: (_, __) => const ColoredBox(color: Colors.black12),
-      errorWidget: (_, __, ___) => const ColoredBox(color: Colors.black12),
     );
   }
 
-  Widget _mediaPlaceholder({
+  Widget _buildPreviewImage({
+    required BuildContext context,
+    required String? url,
+    required BoxFit fit,
+  }) {
+    if (localCoverBytes != null) {
+      return Image.memory(localCoverBytes!, fit: fit);
+    }
+    if (localCoverPath != null && localCoverPath!.trim().isNotEmpty) {
+      return Image.file(File(localCoverPath!), fit: fit);
+    }
+    if (url == null || url.trim().isEmpty) {
+      return const _PlaceholderArtwork();
+    }
+    return CachedNetworkImage(
+      imageUrl: _resolveUrl(context, url),
+      fit: fit,
+      fadeInDuration: const Duration(milliseconds: 140),
+      fadeOutDuration: const Duration(milliseconds: 120),
+      placeholder: (_, __) => const _PlaceholderArtwork(),
+      errorWidget: (_, __, ___) => const _PlaceholderArtwork(),
+    );
+  }
+
+  Widget _mediaSurface({required Widget child}) {
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF1F2937),
+            Color(0xFF111827),
+          ],
+        ),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _buildDarkOverlay() {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.black.withOpacity(0.08),
+            Colors.black.withOpacity(0.28),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Size _mediaFrameSize({
     required double mediaWidth,
     required double maxMediaHeight,
     required double aspectRatio,
   }) {
-    final normalized = aspectRatio.isFinite && aspectRatio > 0
-        ? aspectRatio
-        : 9 / 16;
-    final preferredH = mediaWidth / normalized;
-    final actualH = preferredH <= maxMediaHeight ? preferredH : maxMediaHeight;
-    final actualW = actualH * normalized;
-    return SizedBox(
-      width: actualW,
-      height: actualH,
-      child: const ColoredBox(color: Colors.black12),
-    );
-  }
-
-  Widget _statusOverlay(String text) {
-    return Positioned.fill(
-      child: Container(
-        color: Colors.black.withOpacity(0.12),
-        alignment: Alignment.center,
-        child: _pill(text),
-      ),
-    );
-  }
-
-  Widget _pill(String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.42),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        text,
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
+    final safeRatio = aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 1;
+    var width = mediaWidth;
+    var height = width / safeRatio;
+    if (height > maxMediaHeight) {
+      height = maxMediaHeight;
+      width = height * safeRatio;
+    }
+    return Size(width, height);
   }
 
   double _resolveAspectRatio(ChatMedia? media, {required double fallback}) {
@@ -437,8 +383,11 @@ class _TextBubble extends StatelessWidget {
 }
 
 class _Avatar extends StatelessWidget {
-  const _Avatar(
-      {required this.name, required this.avatarUrl, required this.seed});
+  const _Avatar({
+    required this.name,
+    required this.avatarUrl,
+    required this.seed,
+  });
 
   final String name;
   final String? avatarUrl;
@@ -456,9 +405,9 @@ class _Avatar extends StatelessWidget {
   }
 
   String _initial() {
-    final t = name.trim();
-    if (t.isEmpty) return '?';
-    return t.characters.first;
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return '?';
+    return trimmed.characters.first;
   }
 
   @override
@@ -476,8 +425,92 @@ class _Avatar extends StatelessWidget {
       backgroundColor: _color(),
       child: Text(
         _initial(),
-        style:
-            const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+}
+
+class _PlaceholderArtwork extends StatelessWidget {
+  const _PlaceholderArtwork();
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF1E293B),
+            Color(0xFF0F172A),
+            Color(0xFF1D4ED8),
+          ],
+        ),
+      ),
+      child: Center(
+        child: Container(
+          width: 42,
+          height: 42,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.14),
+            shape: BoxShape.circle,
+          ),
+          child: const Icon(
+            Icons.image_outlined,
+            color: Colors.white,
+            size: 22,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PlayButton extends StatelessWidget {
+  const _PlayButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 50,
+      height: 50,
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.34),
+        shape: BoxShape.circle,
+      ),
+      child: const Icon(
+        Icons.play_arrow,
+        color: Colors.white,
+        size: 30,
+      ),
+    );
+  }
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.44),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }

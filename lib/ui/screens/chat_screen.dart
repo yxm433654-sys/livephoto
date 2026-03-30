@@ -9,7 +9,9 @@ import 'package:dynamic_photo_chat_flutter/ui/screens/dynamic_photo_screen.dart'
 import 'package:dynamic_photo_chat_flutter/ui/screens/video_player_screen.dart';
 import 'package:dynamic_photo_chat_flutter/ui/widgets/message_bubble.dart';
 import 'package:dynamic_photo_chat_flutter/utils/live_photo_detector.dart';
+import 'package:dynamic_photo_chat_flutter/utils/media_downloader.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:provider/provider.dart';
@@ -83,10 +85,11 @@ class _ChatScreenState extends State<ChatScreen> {
         page: 0,
         size: 100,
       );
-      history.sort((a, b) => a.id.compareTo(b.id));
+      history.sort(_compareMessages);
 
       _messages
         ..clear()
+        ..sort(_compareMessages)
         ..addAll(history);
       _lastMessageId = _messages.isEmpty
           ? 0
@@ -121,8 +124,8 @@ class _ChatScreenState extends State<ChatScreen> {
           _messages[idx] = message;
         } else {
           _messages.add(message);
-          _messages.sort((a, b) => a.id.compareTo(b.id));
         }
+        _messages.sort(_compareMessages);
         _dropLocalPreviewIfRemoteReady(message);
       });
 
@@ -231,7 +234,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }) {
     setState(() {
       _messages.add(message);
-      _messages.sort((a, b) => a.id.compareTo(b.id));
+      _messages.sort(_compareMessages);
       if (localCoverBytes != null) {
         _localCoverBytesByMessageId[message.id] = localCoverBytes;
       }
@@ -249,6 +252,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final localPath = _localCoverPathByMessageId.remove(tempId);
     setState(() {
       _messages[idx] = message;
+      _messages.sort(_compareMessages);
       if (localBytes != null) {
         _localCoverBytesByMessageId[message.id] = localBytes;
       }
@@ -264,6 +268,20 @@ class _ChatScreenState extends State<ChatScreen> {
       _localCoverBytesByMessageId.remove(tempId);
       _localCoverPathByMessageId.remove(tempId);
     });
+  }
+
+  int _compareMessages(ChatMessage a, ChatMessage b) {
+    final aTime = a.createdAt?.millisecondsSinceEpoch ?? 0;
+    final bTime = b.createdAt?.millisecondsSinceEpoch ?? 0;
+    if (aTime != bTime) {
+      return aTime.compareTo(bTime);
+    }
+    final aTemp = a.id < 0;
+    final bTemp = b.id < 0;
+    if (aTemp != bTemp) {
+      return aTemp ? 1 : -1;
+    }
+    return a.id.compareTo(b.id);
   }
 
   void _dropLocalPreviewIfRemoteReady(ChatMessage message) {
@@ -811,6 +829,73 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<void> _handleChatAction(_ChatAction action) async {
+    switch (action) {
+      case _ChatAction.clearConversation:
+        await _clearConversation();
+        break;
+      case _ChatAction.clearCache:
+        await _clearMediaCache();
+        break;
+    }
+  }
+
+  Future<void> _clearConversation() async {
+    final state = context.read<AppState>();
+    final session = state.session;
+    if (session == null) return;
+
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Clear chat history?'),
+            content: const Text(
+              'This will remove the current one-to-one conversation history from the server.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Clear'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+
+    try {
+      await state.messages.clearConversation(
+        userId: session.userId,
+        peerId: widget.peerId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _messages.clear();
+        _localCoverBytesByMessageId.clear();
+        _localCoverPathByMessageId.clear();
+      });
+      _showSnack('Chat history cleared.');
+    } catch (e) {
+      _showSnack(_toUserError(e));
+    }
+  }
+
+  Future<void> _clearMediaCache() async {
+    try {
+      await MediaDownloader.clearCache();
+      await DefaultCacheManager().emptyCache();
+      imageCache.clear();
+      imageCache.clearLiveImages();
+      _showSnack('Media cache cleared.');
+    } catch (e) {
+      _showSnack(_toUserError(e));
+    }
+  }
+
   void _openImagePreview(String url) {
     showDialog<void>(
       context: context,
@@ -930,6 +1015,21 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           ],
         ),
+        actions: [
+          PopupMenuButton<_ChatAction>(
+            onSelected: _handleChatAction,
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _ChatAction.clearConversation,
+                child: Text('Clear chat history'),
+              ),
+              PopupMenuItem(
+                value: _ChatAction.clearCache,
+                child: Text('Clear cache'),
+              ),
+            ],
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -1030,4 +1130,9 @@ enum _AttachAction {
   galleryVideo,
   cameraImage,
   cameraVideo,
+}
+
+enum _ChatAction {
+  clearConversation,
+  clearCache,
 }

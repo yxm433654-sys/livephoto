@@ -153,4 +153,21 @@ class MessageService {
       throw Exception(res.message ?? 'Mark read failed');
     }
   }
+
+  Future<void> clearConversation({
+    required int userId,
+    required int peerId,
+  }) async {
+    final res = await _api.delete<Object?>(
+      '/api/message/conversation',
+      query: {
+        'userId': userId.toString(),
+        'peerId': peerId.toString(),
+      },
+      decode: (raw) => raw,
+    );
+    if (!res.success) {
+      throw Exception(res.message ?? 'Clear conversation failed');
+    }
+  }
 }

@@ -59,4 +59,20 @@ class ApiClient {
         jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
     return ApiResponse.fromJson<T>(parsed, decode);
   }
+
+  Future<ApiResponse<T>> delete<T>(
+    String path, {
+    Map<String, String>? query,
+    Object? body,
+    required T Function(Object? raw) decode,
+  }) async {
+    final res = await _http.delete(
+      uri(path, query),
+      headers: {'Content-Type': 'application/json'},
+      body: body == null ? null : jsonEncode(body),
+    );
+    final parsed =
+        jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    return ApiResponse.fromJson<T>(parsed, decode);
+  }
 }
