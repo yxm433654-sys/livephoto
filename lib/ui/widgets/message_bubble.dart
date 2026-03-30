@@ -1,4 +1,6 @@
 import 'dart:math' as math;
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dynamic_photo_chat_flutter/models/message.dart';
@@ -19,6 +21,8 @@ class MessageBubble extends StatelessWidget {
     required this.onPlayVideo,
     required this.onPreviewImage,
     required this.onOpenDynamicPhoto,
+    this.localCoverBytes,
+    this.localCoverPath,
     this.videoCoverWaitProgress,
     this.videoAspectRatio,
   });
@@ -32,6 +36,8 @@ class MessageBubble extends StatelessWidget {
   final void Function(String url) onPlayVideo;
   final void Function(String url) onPreviewImage;
   final void Function(String coverUrl, String videoUrl) onOpenDynamicPhoto;
+  final Uint8List? localCoverBytes;
+  final String? localCoverPath;
   final double? videoCoverWaitProgress;
   final double? videoAspectRatio;
 
@@ -100,6 +106,41 @@ class MessageBubble extends StatelessWidget {
     }
 
     if (t == 'IMAGE') {
+      final localBytes = localCoverBytes;
+      final localPath = localCoverPath;
+      if (localBytes != null) {
+        return GestureDetector(
+          onTap: () {
+            // 发送端本地预览：不走服务端
+          },
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: mediaWidth,
+                maxHeight: maxMediaHeight,
+              ),
+              child: Image.memory(localBytes, fit: BoxFit.cover),
+            ),
+          ),
+        );
+      }
+      if (localPath != null && localPath.trim().isNotEmpty) {
+        return GestureDetector(
+          onTap: () {},
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: mediaWidth,
+                maxHeight: maxMediaHeight,
+              ),
+              child: Image.file(File(localPath), fit: BoxFit.cover),
+            ),
+          ),
+        );
+      }
+
       final url = message.coverUrl;
       if (url == null || url.trim().isEmpty) return const Text('图片不可用');
       final resolved = _resolveUrl(context, url);
@@ -128,13 +169,28 @@ class MessageBubble extends StatelessWidget {
           (cover == null || cover.isEmpty)) {
         return const Text('视频不可用');
       }
+
+      // 发送端：优先展示本地缩略图作为占位，不依赖服务端封面。
+      ImageProvider? localProvider;
+      final localBytes = localCoverBytes;
+      final localPath = localCoverPath;
+      if (localBytes != null) {
+        localProvider = MemoryImage(localBytes);
+      } else if (localPath != null && localPath.trim().isNotEmpty) {
+        localProvider = FileImage(File(localPath));
+      }
       return _videoPreview(
         mediaWidth: mediaWidth,
         maxMediaHeight: maxMediaHeight,
-        videoUrl:
-            video == null || video.isEmpty ? null : _resolveUrl(context, video),
+        // 列表不触发视频下载，只有点详情才会下载/播放
+        videoUrl: video == null || video.isEmpty ? null : _resolveUrl(context, video),
         coverUrl:
-            cover == null || cover.trim().isEmpty ? null : _resolveUrl(context, cover),
+            localProvider != null
+                ? null
+                : (cover == null || cover.trim().isEmpty
+                    ? null
+                    : _resolveUrl(context, cover)),
+        localCoverProvider: localProvider,
         coverWaitProgress: videoCoverWaitProgress,
         videoAspectRatio: videoAspectRatio,
       );
@@ -143,10 +199,25 @@ class MessageBubble extends StatelessWidget {
     if (t == 'DYNAMIC_PHOTO') {
       final cover = message.coverUrl;
       final video = message.videoUrl;
-      if (cover == null || cover.trim().isEmpty) {
-        return const Text('动态图片不可用');
+      final localBytes = localCoverBytes;
+      final localPath = localCoverPath;
+
+      Widget coverWidget;
+      if (localBytes != null) {
+        coverWidget = Image.memory(localBytes, fit: BoxFit.cover);
+      } else if (localPath != null && localPath.trim().isNotEmpty) {
+        coverWidget = Image.file(File(localPath), fit: BoxFit.cover);
+      } else {
+        if (cover == null || cover.trim().isEmpty) {
+          return const Text('动态图片不可用');
+        }
+        final resolvedCover = _resolveUrl(context, cover);
+        coverWidget = _networkImageWithProgress(
+          url: resolvedCover,
+          cacheWidth: cacheW,
+        );
       }
-      final resolvedCover = _resolveUrl(context, cover);
+
       final resolvedVideo =
           (video == null || video.trim().isEmpty)
               ? null
@@ -154,7 +225,13 @@ class MessageBubble extends StatelessWidget {
       return GestureDetector(
         onTap: resolvedVideo == null
             ? null
-            : () => onOpenDynamicPhoto(resolvedCover, resolvedVideo),
+            : () {
+                // 进入详情后再下载视频
+                final srvCover = (cover == null || cover.trim().isEmpty)
+                    ? ''
+                    : _resolveUrl(context, cover);
+                onOpenDynamicPhoto(srvCover, resolvedVideo);
+              },
         child: ClipRRect(
           borderRadius: BorderRadius.circular(10),
           child: ConstrainedBox(
@@ -166,10 +243,7 @@ class MessageBubble extends StatelessWidget {
               clipBehavior: Clip.hardEdge,
               alignment: Alignment.center,
               children: [
-                _networkImageWithProgress(
-                  url: resolvedCover,
-                  cacheWidth: cacheW,
-                ),
+                coverWidget,
                 Positioned(
                   right: 8,
                   top: 8,
@@ -190,6 +264,7 @@ class MessageBubble extends StatelessWidget {
     required double maxMediaHeight,
     required String? videoUrl,
     required String? coverUrl,
+    required ImageProvider? localCoverProvider,
     required double? coverWaitProgress,
     required double? videoAspectRatio,
   }) {
@@ -206,7 +281,14 @@ class MessageBubble extends StatelessWidget {
             clipBehavior: Clip.hardEdge,
             alignment: Alignment.center,
             children: [
-              if (coverUrl == null)
+              if (localCoverProvider != null)
+                Image(
+                  image: localCoverProvider,
+                  fit: BoxFit.cover,
+                  width: double.infinity,
+                  height: double.infinity,
+                )
+              else if (coverUrl == null)
                 Builder(builder: (_) {
                   // 占位期间封面不存在：用视频宽高比推导出等比占位尺寸，避免“比例被写死导致看起来变形”。
                   final ar = videoAspectRatio ?? 9 / 16;
@@ -238,7 +320,7 @@ class MessageBubble extends StatelessWidget {
                       color: Colors.white, size: 28),
                 ),
               ),
-              if (coverUrl == null)
+              if (localCoverProvider == null && coverUrl == null)
                 Positioned(
                   right: 8,
                   top: 8,

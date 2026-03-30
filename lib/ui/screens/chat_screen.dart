@@ -31,6 +31,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final ImagePicker _picker = ImagePicker();
 
   final List<ChatMessage> _messages = [];
+  final Map<int, Uint8List> _localCoverBytesByMessageId = <int, Uint8List>{};
+  final Map<int, String> _localCoverPathByMessageId = <int, String>{};
   final Set<int> _coverRefreshing = <int>{};
   static const int _maxConcurrentCoverRefresh = 2;
   final Map<int, double> _videoCoverWaitProgress = <int, double>{};
@@ -315,7 +317,8 @@ class _ChatScreenState extends State<ChatScreen> {
               movPath: livePhotoInfo.videoPath,
               userId: session.userId,
             );
-            await _sendForDynamic(uploaded, session.userId);
+            final mid = await _sendForDynamic(uploaded, session.userId);
+            _localCoverPathByMessageId[mid] = livePhotoInfo.imagePath;
             return;
           }
         }
@@ -357,7 +360,8 @@ class _ChatScreenState extends State<ChatScreen> {
             filePath: filePath,
             userId: session.userId,
           );
-          await _sendForDynamic(uploaded, session.userId);
+          final mid = await _sendForDynamic(uploaded, session.userId);
+          _localCoverPathByMessageId[mid] = filePath;
           return;
         }
 
@@ -561,27 +565,37 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    final XFile? video = await _picker.pickVideo(
-      source: ImageSource.gallery,
-    );
-    if (video == null || !mounted) return;
+    // 统一使用 PhotoManager 选择视频，拿到系统提供的缩略图用于“发送端本地占位”
+    final asset = await _pickVideoAsset();
+    if (asset == null || !mounted) return;
 
     final state = context.read<AppState>();
     final session = state.session!;
 
     try {
+      final file = await asset.file;
+      if (file == null) {
+        throw Exception('无法读取视频文件');
+      }
+      final thumb = await asset.thumbnailDataWithSize(
+        const ThumbnailSize(420, 420),
+      );
       final uploaded = await state.files.uploadNormalFromXFile(
-        file: video,
+        file: XFile(file.path),
         userId: session.userId,
       );
-      await _sendForUploadedNormal(uploaded, session.userId);
+      await _sendForUploadedNormal(
+        uploaded,
+        session.userId,
+        localCoverBytes: thumb,
+      );
     } catch (e) {
       rethrow;
     }
   }
 
-  Future<void> _sendForUploadedNormal(
-      FileUploadResponse uploaded, int myId) async {
+  Future<void> _sendForUploadedNormal(FileUploadResponse uploaded, int myId,
+      {Uint8List? localCoverBytes, String? localCoverPath}) async {
     final state = context.read<AppState>();
     final fileType = (uploaded.fileType ?? '').toUpperCase();
     if (uploaded.fileId == null) {
@@ -606,6 +620,12 @@ class _ChatScreenState extends State<ChatScreen> {
         createdAt: DateTime.now(),
       );
       setState(() => _messages.add(msg));
+      if (localCoverBytes != null) {
+        _localCoverBytesByMessageId[mid] = localCoverBytes;
+      }
+      if (localCoverPath != null && localCoverPath.trim().isNotEmpty) {
+        _localCoverPathByMessageId[mid] = localCoverPath;
+      }
       _scrollToBottom();
       return;
     }
@@ -629,11 +649,17 @@ class _ChatScreenState extends State<ChatScreen> {
       createdAt: DateTime.now(),
     );
     setState(() => _messages.add(msg));
+    if (localCoverBytes != null) {
+      _localCoverBytesByMessageId[mid] = localCoverBytes;
+    }
+    if (localCoverPath != null && localCoverPath.trim().isNotEmpty) {
+      _localCoverPathByMessageId[mid] = localCoverPath;
+    }
     _maybeRefreshVideoCover(msg);
     _scrollToBottom();
   }
 
-  Future<void> _sendForDynamic(FileUploadResponse uploaded, int myId) async {
+  Future<int> _sendForDynamic(FileUploadResponse uploaded, int myId) async {
     final coverId = uploaded.coverId;
     final videoId = uploaded.videoId;
     if (coverId == null || videoId == null) {
@@ -660,6 +686,58 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     setState(() => _messages.add(msg));
     _scrollToBottom();
+    return mid;
+  }
+
+  Future<AssetEntity?> _pickVideoAsset() async {
+    final paths = await PhotoManager.getAssetPathList(type: RequestType.video);
+    if (paths.isEmpty || !mounted) return null;
+    final path = paths.first;
+    final assets = await path.getAssetListRange(start: 0, end: 200);
+    if (!mounted) return null;
+    return showModalBottomSheet<AssetEntity>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        final height = MediaQuery.of(ctx).size.height * 0.85;
+        return SafeArea(
+          child: SizedBox(
+            height: height,
+            child: GridView.builder(
+              padding: const EdgeInsets.all(8),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 4,
+                crossAxisSpacing: 6,
+                mainAxisSpacing: 6,
+              ),
+              itemCount: assets.length,
+              itemBuilder: (_, i) {
+                final asset = assets[i];
+                return GestureDetector(
+                  onTap: () => Navigator.of(ctx).pop(asset),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: FutureBuilder<Uint8List?>(
+                      future: asset.thumbnailDataWithSize(
+                        const ThumbnailSize(300, 300),
+                      ),
+                      builder: (_, snap) {
+                        final data = snap.data;
+                        if (data == null) {
+                          return const ColoredBox(color: Colors.black12);
+                        }
+                        return Image.memory(data, fit: BoxFit.cover);
+                      },
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
   }
 
   void _maybeRefreshVideoCover(ChatMessage m) {
@@ -930,6 +1008,11 @@ class _ChatScreenState extends State<ChatScreen> {
                           onPlayVideo: _openPlayer,
                           onPreviewImage: _openImagePreview,
                           onOpenDynamicPhoto: _openDynamicPhoto,
+                          localCoverBytes: isMine
+                              ? _localCoverBytesByMessageId[m.id]
+                              : null,
+                          localCoverPath:
+                              isMine ? _localCoverPathByMessageId[m.id] : null,
                           videoCoverWaitProgress:
                               _videoCoverWaitProgress[m.id],
                           videoAspectRatio: _videoAspectRatios[m.id],

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:dynamic_photo_chat_flutter/utils/media_downloader.dart';
 import 'package:video_player/video_player.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
@@ -15,6 +16,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   VideoPlayerController? _controller;
   bool _loading = true;
   String? _error;
+  int _received = 0;
+  int? _total;
 
   @override
   void initState() {
@@ -24,8 +27,26 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   Future<void> _init() async {
     try {
-      final controller =
-          VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      setState(() {
+        _loading = true;
+        _error = null;
+        _received = 0;
+        _total = null;
+      });
+
+      final downloaded = await MediaDownloader.downloadToTempFile(
+        url: widget.url,
+        filenameHint: 'video_${widget.url.hashCode}.mp4',
+        onProgress: (r, t) {
+          if (!mounted) return;
+          setState(() {
+            _received = r;
+            _total = t;
+          });
+        },
+      );
+
+      final controller = VideoPlayerController.file(downloaded.file);
       _controller = controller;
       await controller.initialize();
       await controller.setLooping(true);
@@ -44,13 +65,31 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final progress = (_total == null || _total == 0)
+        ? null
+        : (_received / _total!).clamp(0.0, 1.0);
     return Scaffold(
       appBar: AppBar(title: Text(widget.title ?? '视频')),
       body: Center(
         child: _error != null
             ? Text(_error!)
             : _loading || _controller == null
-                ? const CircularProgressIndicator()
+                ? Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 220,
+                        child: LinearProgressIndicator(value: progress),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        progress == null
+                            ? '正在下载...'
+                            : '正在下载... ${(progress * 100).round()}%',
+                        style: const TextStyle(color: Color(0xFF6B7280)),
+                      ),
+                    ],
+                  )
                 : AspectRatio(
                     aspectRatio: _controller!.value.aspectRatio == 0
                         ? 16 / 9

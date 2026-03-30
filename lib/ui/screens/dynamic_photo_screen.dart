@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:dynamic_photo_chat_flutter/utils/media_downloader.dart';
 import 'package:video_player/video_player.dart';
 
 class DynamicPhotoScreen extends StatefulWidget {
@@ -25,6 +26,9 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
   bool _initing = false;
   String? _error;
   double _aspectRatio = 3 / 4;
+  bool _downloading = true;
+  int _received = 0;
+  int? _total;
 
   @override
   void dispose() {
@@ -34,7 +38,20 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
 
   Future<void> _ensureController() async {
     if (_controller != null) return;
-    final c = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl));
+    final downloaded = await MediaDownloader.downloadToTempFile(
+      url: widget.videoUrl,
+      filenameHint: 'live_${widget.videoUrl.hashCode}.mp4',
+      onProgress: (r, t) {
+        if (!mounted) return;
+        setState(() {
+          _received = r;
+          _total = t;
+        });
+      },
+    );
+    if (!mounted) return;
+    setState(() => _downloading = false);
+    final c = VideoPlayerController.file(downloaded.file);
     _controller = c;
     c.addListener(_onTick);
     await c.initialize();
@@ -111,6 +128,9 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
   Widget build(BuildContext context) {
     final c = _controller;
     final hasVideo = _showVideo && c != null && c.value.isInitialized;
+    final progress = (_total == null || _total == 0)
+        ? null
+        : (_received / _total!).clamp(0.0, 1.0);
     return Scaffold(
       appBar: AppBar(title: Text(widget.title ?? '实况照片')),
       body: Center(
@@ -138,6 +158,40 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
                             errorBuilder: (_, __, ___) =>
                                 const ColoredBox(color: Colors.black12),
                           ),
+                          if (_downloading)
+                            Positioned.fill(
+                              child: Container(
+                                color: Colors.black.withOpacity(0.15),
+                                alignment: Alignment.center,
+                                child: SizedBox(
+                                  width: 240,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      LinearProgressIndicator(value: progress),
+                                      const SizedBox(height: 10),
+                                      Text(
+                                        progress == null
+                                            ? '正在下载视频...'
+                                            : '正在下载视频... ${(progress * 100).round()}%',
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      const Text(
+                                        '下载完成后长按播放',
+                                        style: TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
                           if (c != null && c.value.isInitialized)
                             Positioned.fill(
                               child: AnimatedOpacity(
