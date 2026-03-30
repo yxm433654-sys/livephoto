@@ -769,7 +769,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<AssetEntity?> _pickAsset(_AssetPickerMode mode) async {
     final permission = await PhotoManager.requestPermissionExtend();
     if (!permission.isAuth) {
-      _showSnack('Please allow media library access first.');
+      _showSnack('请先允许访问媒体库');
       return null;
     }
 
@@ -917,56 +917,11 @@ class _ChatScreenState extends State<ChatScreen> {
     String videoUrl,
     double aspectRatio,
   ) async {
-    final navigator = Navigator.of(context);
-    final rootNavigator = Navigator.of(context, rootNavigator: true);
-    final dialogContext = rootNavigator.context;
-    final progress = ValueNotifier<double?>(null);
-    showDialog<void>(
-      context: dialogContext,
-      barrierDismissible: false,
-      builder: (_) => ValueListenableBuilder<double?>(
-        valueListenable: progress,
-        builder: (_, value, __) => AlertDialog(
-          backgroundColor: const Color(0xFF111827),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const CircularProgressIndicator(color: Colors.white),
-              const SizedBox(height: 16),
-              Text(
-                value == null
-                    ? '正在准备 Live Photo...'
-                    : '正在准备 Live Photo... ${(value * 100).round()}%',
-                style: const TextStyle(color: Colors.white),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-    try {
-      if (coverUrl.trim().isNotEmpty) {
-        await precacheImage(NetworkImage(coverUrl), dialogContext);
-      }
-      await MediaDownloader.downloadToCacheFile(
-        url: videoUrl,
-        extensionHint: 'mp4',
-        onProgress: (received, total) {
-          if (total == null || total <= 0) {
-            progress.value = null;
-            return;
-          }
-          progress.value = (received / total).clamp(0.0, 1.0);
-        },
-      );
-    } finally {
-      progress.dispose();
-      if (rootNavigator.mounted && rootNavigator.canPop()) {
-        rootNavigator.pop();
-      }
+    if (coverUrl.trim().isNotEmpty) {
+      await precacheImage(NetworkImage(coverUrl), context);
+      if (!mounted) return;
     }
-    if (!navigator.mounted) return;
-    navigator.push(
+    Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => DynamicPhotoScreen(
           coverUrl: coverUrl,

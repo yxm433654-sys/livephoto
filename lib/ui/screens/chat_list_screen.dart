@@ -19,33 +19,37 @@ class _ChatListScreenState extends State<ChatListScreen> {
     UserProfile? foundUser;
     String? error;
     bool searching = false;
+
     Future<void> runSearch(StateSetter setInnerState) async {
       final username = controller.text.trim();
       if (username.isEmpty) {
         setInnerState(() {
           foundUser = null;
-          error = 'Please enter a username.';
+          error = '请输入用户名';
         });
         return;
       }
+
       final session = context.read<AppState>().session;
       if (session != null && session.username == username) {
         setInnerState(() {
           foundUser = null;
-          error = 'You cannot add yourself.';
+          error = '不能添加自己';
         });
         return;
       }
+
       setInnerState(() {
         searching = true;
         error = null;
         foundUser = null;
       });
+
       final user = await context.read<AppState>().findUserByUsername(username);
       setInnerState(() {
         searching = false;
         foundUser = user;
-        error = user == null ? 'User not found.' : null;
+        error = user == null ? '未找到该用户' : null;
       });
     }
 
@@ -54,62 +58,69 @@ class _ChatListScreenState extends State<ChatListScreen> {
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setInnerState) => AlertDialog(
-            title: const Text('Add conversation'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: controller,
-                  autofocus: true,
-                  textInputAction: TextInputAction.search,
-                  decoration: const InputDecoration(
-                    labelText: 'Username',
-                    hintText: 'Search by username',
-                    prefixIcon: Icon(Icons.search),
+            title: const Text('添加好友'),
+            content: SizedBox(
+              width: 360,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    textInputAction: TextInputAction.search,
+                    decoration: const InputDecoration(
+                      labelText: '用户名',
+                      hintText: '输入用户名进行搜索',
+                      prefixIcon: Icon(Icons.search),
+                    ),
+                    onSubmitted: (_) => runSearch(setInnerState),
                   ),
-                  onSubmitted: (_) => runSearch(setInnerState),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.tonal(
-                    onPressed: searching ? null : () => runSearch(setInnerState),
-                    child: const Text('Search'),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                if (searching)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: CircularProgressIndicator(),
-                  )
-                else if (foundUser != null)
-                  _FoundUserCard(user: foundUser!)
-                else
-                  Container(
+                  const SizedBox(height: 14),
+                  SizedBox(
                     width: double.infinity,
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF3F4F6),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Text(
-                      error ?? 'Enter a username to start a conversation.',
-                      style: const TextStyle(color: Color(0xFF6B7280)),
+                    child: FilledButton.tonal(
+                      onPressed: searching ? null : () => runSearch(setInnerState),
+                      child: const Text('搜索'),
                     ),
                   ),
-              ],
+                  const SizedBox(height: 16),
+                  if (searching)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 14),
+                      child: CircularProgressIndicator(),
+                    )
+                  else if (foundUser != null)
+                    _FoundUserCard(user: foundUser!)
+                  else
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8FAFC),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: const Color(0xFFE5E7EB)),
+                      ),
+                      child: Text(
+                        error ?? '输入用户名后开始搜索并添加好友。',
+                        style: const TextStyle(
+                          color: Color(0xFF6B7280),
+                          height: 1.45,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('Cancel'),
+                child: const Text('取消'),
               ),
               FilledButton(
                 onPressed: foundUser == null
                     ? null
                     : () => Navigator.of(dialogContext).pop(foundUser),
-                child: const Text('Add'),
+                child: const Text('添加'),
               ),
             ],
           ),
@@ -127,18 +138,18 @@ class _ChatListScreenState extends State<ChatListScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Remove conversation'),
+        title: const Text('移除会话'),
         content: Text(
-          'Remove the conversation with ${context.read<AppState>().displayNameFor(peerId)} from the list?',
+          '要把 ${context.read<AppState>().displayNameFor(peerId)} 从会话列表中移除吗？',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
+            child: const Text('取消'),
           ),
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Remove'),
+            child: const Text('移除'),
           ),
         ],
       ),
@@ -167,7 +178,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final session = state.session;
-    final username = session?.username ?? 'Guest';
+    final username = session?.username ?? '游客';
 
     return Scaffold(
       backgroundColor: const Color(0xFFF6F7FB),
@@ -187,7 +198,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
               ),
             ),
             const Text(
-              'Conversations',
+              '会话',
               style: TextStyle(
                 fontSize: 12,
                 color: Color(0xFF6B7280),
@@ -198,7 +209,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
         ),
         actions: [
           IconButton(
-            tooltip: 'Add by username',
+            tooltip: '按用户名添加好友',
             onPressed: _addPeer,
             icon: const Icon(Icons.person_add_alt_1_rounded),
           ),
@@ -207,8 +218,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
             onPressed: () async {
               final overlay =
                   Overlay.of(context).context.findRenderObject() as RenderBox?;
-              final button = _menuButtonKey.currentContext?.findRenderObject()
-                  as RenderBox?;
+              final button =
+                  _menuButtonKey.currentContext?.findRenderObject() as RenderBox?;
               if (overlay == null || button == null) return;
               final topLeft =
                   button.localToGlobal(Offset.zero, ancestor: overlay);
@@ -234,14 +245,14 @@ class _ChatListScreenState extends State<ChatListScreen> {
                     value: 'add',
                     child: _ConversationMenuRow(
                       icon: Icons.person_add_alt_1_outlined,
-                      label: 'Add conversation',
+                      label: '添加好友',
                     ),
                   ),
                   PopupMenuItem<String>(
                     value: 'logout',
                     child: _ConversationMenuRow(
                       icon: Icons.logout_rounded,
-                      label: 'Log out',
+                      label: '退出登录',
                     ),
                   ),
                 ],
@@ -335,9 +346,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    unread > 0
-                                        ? '$unread unread messages'
-                                        : 'Tap to open the conversation',
+                                    unread > 0 ? '$unread 条未读消息' : '点击进入聊天',
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
@@ -424,7 +433,7 @@ class _FoundUserCard extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  'User ID ${user.userId}',
+                  '用户 ID ${user.userId}',
                   style: const TextStyle(
                     color: Color(0xFF6B7280),
                     fontSize: 12,
@@ -465,7 +474,7 @@ class _EmptyConversationState extends StatelessWidget {
             ),
             const SizedBox(height: 18),
             const Text(
-              'No conversations yet',
+              '还没有会话',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
@@ -473,7 +482,7 @@ class _EmptyConversationState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Use the add button in the top right to search for a username and start chatting.',
+              '点击右上角按钮，按用户名搜索并开始聊天。',
               textAlign: TextAlign.center,
               style: TextStyle(color: Color(0xFF6B7280), height: 1.5),
             ),

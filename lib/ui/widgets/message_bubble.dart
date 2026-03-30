@@ -242,28 +242,40 @@ class MessageBubble extends StatelessWidget {
     required BoxFit fit,
   }) {
     if (localCoverBytes != null) {
-      return Image.memory(
-        localCoverBytes!,
-        fit: fit,
-        gaplessPlayback: true,
+      return Container(
+        color: const Color(0xFFF3F4F6),
+        alignment: Alignment.center,
+        child: Image.memory(
+          localCoverBytes!,
+          fit: fit,
+          gaplessPlayback: true,
+        ),
       );
     }
     if (localCoverPath != null && localCoverPath!.trim().isNotEmpty) {
-      return Image.file(
-        File(localCoverPath!),
-        fit: fit,
-        gaplessPlayback: true,
+      return Container(
+        color: const Color(0xFFF3F4F6),
+        alignment: Alignment.center,
+        child: Image.file(
+          File(localCoverPath!),
+          fit: fit,
+          gaplessPlayback: true,
+        ),
       );
     }
     if (url == null || url.trim().isEmpty) {
       return const _NeutralPlaceholder();
     }
-    return Image(
-      image: CachedNetworkImageProvider(_resolveUrl(context, url)),
-      fit: fit,
-      gaplessPlayback: true,
-      filterQuality: FilterQuality.medium,
-      errorBuilder: (_, __, ___) => const _NeutralPlaceholder(),
+    return Container(
+      color: const Color(0xFFF3F4F6),
+      alignment: Alignment.center,
+      child: Image(
+        image: CachedNetworkImageProvider(_resolveUrl(context, url)),
+        fit: fit,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, __, ___) => const _NeutralPlaceholder(),
+      ),
     );
   }
 
