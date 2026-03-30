@@ -1,5 +1,6 @@
 ﻿import 'dart:async';
 import 'dart:typed_data';
+import 'dart:io';
 
 import 'package:dynamic_photo_chat_flutter/models/chat_media.dart';
 import 'package:dynamic_photo_chat_flutter/models/file_upload_response.dart';
@@ -667,13 +668,44 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _pickGalleryImage() async {
-    final asset = await _pickAsset(AssetType.image);
+    final asset = await _pickAsset(_AssetPickerMode.image);
     if (asset == null) return;
     final file = await asset.file;
     if (file == null) {
       _showSnack('Unable to read the selected file.');
       return;
     }
+
+    final previewBytes = await asset.thumbnailDataWithSize(
+      const ThumbnailSize(512, 512),
+    );
+
+    await _sendImageFromPath(
+      filePath: file.path,
+      previewBytes: previewBytes,
+    );
+  }
+
+  Future<void> _pickGalleryVideo() async {
+    final asset = await _pickAsset(_AssetPickerMode.video);
+    if (asset == null) return;
+    final file = await asset.file;
+    if (file == null) {
+      _showSnack('Unable to read the selected file.');
+      return;
+    }
+    final previewBytes = await asset.thumbnailDataWithSize(
+      const ThumbnailSize(512, 512),
+    );
+    await _sendVideoFromPath(
+      filePath: file.path,
+      previewBytes: previewBytes,
+    );
+  }
+
+  Future<void> _pickGalleryLivePhoto() async {
+    final asset = await _pickAsset(_AssetPickerMode.livePhoto);
+    if (asset == null) return;
 
     final previewBytes = await asset.thumbnailDataWithSize(
       const ThumbnailSize(512, 512),
@@ -693,44 +725,23 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    final isMotion = await LivePhotoDetector.detectMotionPhoto(asset);
-    if (isMotion) {
-      await _sendDynamicPhoto(
-        coverPath: file.path,
-        previewBytes: previewBytes,
-        upload: (userId) =>
-            context.read<AppState>().files.uploadMotionPhotoFromPath(
-                  filePath: file.path,
-                  userId: userId,
-                ),
-      );
-      return;
-    }
-
-    await _sendImageFromPath(
-      filePath: file.path,
-      previewBytes: previewBytes,
-    );
-  }
-
-  Future<void> _pickGalleryVideo() async {
-    final asset = await _pickAsset(AssetType.video);
-    if (asset == null) return;
     final file = await asset.file;
     if (file == null) {
-      _showSnack('Unable to read the selected file.');
+      _showSnack('Unable to read the selected live photo.');
       return;
     }
-    final previewBytes = await asset.thumbnailDataWithSize(
-      const ThumbnailSize(512, 512),
-    );
-    await _sendVideoFromPath(
-      filePath: file.path,
+
+    await _sendDynamicPhoto(
+      coverPath: file.path,
       previewBytes: previewBytes,
+      upload: (userId) => context.read<AppState>().files.uploadMotionPhotoFromPath(
+            filePath: file.path,
+            userId: userId,
+          ),
     );
   }
 
-  Future<AssetEntity?> _pickAsset(AssetType type) async {
+  Future<AssetEntity?> _pickAsset(_AssetPickerMode mode) async {
     final permission = await PhotoManager.requestPermissionExtend();
     if (!permission.isAuth) {
       _showSnack('Please allow media library access first.');
@@ -738,7 +749,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     final paths = await PhotoManager.getAssetPathList(
-      type: type == AssetType.video ? RequestType.video : RequestType.image,
+      type: mode == _AssetPickerMode.video ? RequestType.video : RequestType.image,
       onlyAll: true,
       filterOption: FilterOptionGroup(
         imageOption: const FilterOption(sizeConstraint: SizeConstraint()),
@@ -750,7 +761,13 @@ class _ChatScreenState extends State<ChatScreen> {
       return null;
     }
 
-    final assets = await paths.first.getAssetListPaged(page: 0, size: 120);
+    final rawAssets = await paths.first.getAssetListPaged(page: 0, size: 180);
+    final assets = await _filterAssetsForMode(rawAssets, mode);
+    if (assets.isEmpty) {
+      if (!mounted) return null;
+      _showSnack(_pickerEmptyMessage(mode));
+      return null;
+    }
     if (!mounted) return null;
 
     return showModalBottomSheet<AssetEntity>(
@@ -779,18 +796,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        FutureBuilder<Uint8List?>(
-                          future: asset.thumbnailDataWithSize(
-                            const ThumbnailSize(300, 300),
-                          ),
-                          builder: (_, snapshot) {
-                            final data = snapshot.data;
-                            if (data == null) {
-                              return const ColoredBox(color: Colors.black12);
-                            }
-                            return Image.memory(data, fit: BoxFit.cover);
-                          },
-                        ),
+                        _AssetThumbnail(asset: asset),
                         if (asset.type == AssetType.video)
                           const Align(
                             alignment: Alignment.bottomRight,
@@ -801,6 +807,12 @@ class _ChatScreenState extends State<ChatScreen> {
                                 color: Colors.white,
                               ),
                             ),
+                          ),
+                        if (mode == _AssetPickerMode.livePhoto)
+                          const Positioned(
+                            top: 6,
+                            left: 6,
+                            child: _AssetLiveBadge(),
                           ),
                       ],
                     ),
@@ -814,6 +826,48 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<List<AssetEntity>> _filterAssetsForMode(
+    List<AssetEntity> assets,
+    _AssetPickerMode mode,
+  ) async {
+    if (mode == _AssetPickerMode.video) {
+      return assets.where((asset) => asset.type == AssetType.video).toList();
+    }
+
+    final filtered = <AssetEntity>[];
+    for (final asset in assets) {
+      if (asset.type != AssetType.image) continue;
+      final isDynamic = await _isDynamicAsset(asset);
+      if (mode == _AssetPickerMode.livePhoto && isDynamic) {
+        filtered.add(asset);
+      } else if (mode == _AssetPickerMode.image && !isDynamic) {
+        filtered.add(asset);
+      }
+    }
+    return filtered;
+  }
+
+  Future<bool> _isDynamicAsset(AssetEntity asset) async {
+    if (Platform.isIOS) {
+      return asset.isLivePhoto;
+    }
+    if (Platform.isAndroid) {
+      return LivePhotoDetector.detectMotionPhoto(asset);
+    }
+    return false;
+  }
+
+  String _pickerEmptyMessage(_AssetPickerMode mode) {
+    switch (mode) {
+      case _AssetPickerMode.image:
+        return 'No images found.';
+      case _AssetPickerMode.video:
+        return 'No videos found.';
+      case _AssetPickerMode.livePhoto:
+        return 'No live photos found.';
+    }
+  }
+
   void _openPlayer(String url) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -822,8 +876,51 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  void _openDynamicPhoto(String coverUrl, String videoUrl) {
-    Navigator.of(context).push(
+  Future<void> _openDynamicPhoto(String coverUrl, String videoUrl) async {
+    final navigator = Navigator.of(context);
+    final rootNavigator = Navigator.of(context, rootNavigator: true);
+    final progress = ValueNotifier<double?>(null);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => ValueListenableBuilder<double?>(
+        valueListenable: progress,
+        builder: (_, value, __) => AlertDialog(
+          backgroundColor: const Color(0xFF111827),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(color: Colors.white),
+              const SizedBox(height: 16),
+              Text(
+                value == null
+                    ? 'Preparing Live Photo...'
+                    : 'Preparing Live Photo... ${(value * 100).round()}%',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    try {
+      await MediaDownloader.downloadToCacheFile(
+        url: videoUrl,
+        extensionHint: 'mp4',
+        onProgress: (received, total) {
+          if (total == null || total <= 0) {
+            progress.value = null;
+            return;
+          }
+          progress.value = (received / total).clamp(0.0, 1.0);
+        },
+      );
+    } finally {
+      progress.dispose();
+      if (mounted) rootNavigator.pop();
+    }
+    if (!mounted) return;
+    navigator.push(
       MaterialPageRoute(
         builder: (_) =>
             DynamicPhotoScreen(coverUrl: coverUrl, videoUrl: videoUrl),
@@ -1015,7 +1112,7 @@ class _ChatScreenState extends State<ChatScreen> {
         await _pickGalleryVideo();
         break;
       case _AttachAction.livePhoto:
-        await _pickGalleryImage();
+        await _pickGalleryLivePhoto();
         break;
       case null:
         break;
@@ -1214,6 +1311,12 @@ enum _AttachAction {
   livePhoto,
 }
 
+enum _AssetPickerMode {
+  image,
+  video,
+  livePhoto,
+}
+
 enum _ChatAction {
   clearConversation,
   clearCache,
@@ -1267,6 +1370,31 @@ class _AttachTile extends StatelessWidget {
   }
 }
 
+class _AssetThumbnail extends StatelessWidget {
+  const _AssetThumbnail({required this.asset});
+
+  final AssetEntity asset;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List?>(
+      future: asset.thumbnailDataWithSize(const ThumbnailSize(280, 280)),
+      builder: (_, snapshot) {
+        final data = snapshot.data;
+        if (data == null) {
+          return const ColoredBox(color: Color(0xFFF3F4F6));
+        }
+        return Image.memory(
+          data,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.low,
+        );
+      },
+    );
+  }
+}
+
 class _MenuActionRow extends StatelessWidget {
   const _MenuActionRow({
     required this.icon,
@@ -1284,6 +1412,30 @@ class _MenuActionRow extends StatelessWidget {
         const SizedBox(width: 10),
         Text(label),
       ],
+    );
+  }
+}
+
+class _AssetLiveBadge extends StatelessWidget {
+  const _AssetLiveBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.42),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: const Text(
+        'LIVE',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.3,
+        ),
+      ),
     );
   }
 }

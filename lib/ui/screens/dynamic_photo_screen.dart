@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dynamic_photo_chat_flutter/utils/media_downloader.dart';
 import 'package:dynamic_photo_chat_flutter/utils/media_saver.dart';
 import 'package:flutter/material.dart';
@@ -31,6 +33,12 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
   int? _total;
 
   @override
+  void initState() {
+    super.initState();
+    unawaited(_ensureController());
+  }
+
+  @override
   void dispose() {
     _controller?.dispose();
     super.dispose();
@@ -62,7 +70,7 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
       final controller = VideoPlayerController.file(downloaded.file);
       await controller.initialize();
       await controller.setLooping(true);
-      await controller.setVolume(0);
+      await controller.setVolume(1.0);
       final ratio = controller.value.aspectRatio;
       if (ratio.isFinite && ratio > 0) {
         _aspectRatio = ratio;
@@ -79,7 +87,7 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
 
   Future<void> _startPreview() async {
     _holding = true;
-    await HapticFeedback.lightImpact();
+    await HapticFeedback.heavyImpact();
     await _ensureController();
     final controller = _controller;
     if (!_holding || controller == null) return;
@@ -134,21 +142,6 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
                   );
                 }
               },
-              trailing: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: const Text(
-                  'LIVE',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ),
             ),
             Expanded(
               child: Center(
@@ -170,11 +163,17 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
                             Image.network(
                               widget.coverUrl,
                               fit: BoxFit.contain,
+                              gaplessPlayback: true,
                               errorBuilder: (_, __, ___) =>
                                   const _DetailPlaceholder(),
                             )
                           else
                             const _DetailPlaceholder(),
+                          const Positioned(
+                            top: 12,
+                            left: 12,
+                            child: _LiveCornerBadge(),
+                          ),
                           if (_showVideo &&
                               controller != null &&
                               controller.value.isInitialized)
@@ -244,12 +243,10 @@ class _DetailTopBar extends StatelessWidget {
   const _DetailTopBar({
     required this.title,
     required this.onSave,
-    this.trailing,
   });
 
   final String title;
   final Future<void> Function() onSave;
-  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -283,7 +280,6 @@ class _DetailTopBar extends StatelessWidget {
                   icon: const Icon(Icons.download_rounded),
                   color: Colors.white,
                 ),
-                if (trailing != null) trailing!,
               ],
             ),
           ),
@@ -305,6 +301,30 @@ class _DetailPlaceholder extends StatelessWidget {
         Icons.photo_outlined,
         size: 42,
         color: Colors.white38,
+      ),
+    );
+  }
+}
+
+class _LiveCornerBadge extends StatelessWidget {
+  const _LiveCornerBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.38),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: const Text(
+        'LIVE',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.3,
+        ),
       ),
     );
   }

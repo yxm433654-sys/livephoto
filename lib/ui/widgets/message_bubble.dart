@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -33,7 +34,7 @@ class MessageBubble extends StatelessWidget {
   final String? peerAvatarUrl;
   final void Function(String url) onPlayVideo;
   final void Function(String url) onPreviewImage;
-  final void Function(String coverUrl, String videoUrl) onOpenDynamicPhoto;
+  final Future<void> Function(String coverUrl, String videoUrl) onOpenDynamicPhoto;
   final Uint8List? localCoverBytes;
   final String? localCoverPath;
 
@@ -196,12 +197,16 @@ class MessageBubble extends StatelessWidget {
     return GestureDetector(
       onTap: videoUrl == null || videoUrl.trim().isEmpty
           ? null
-          : () => onOpenDynamicPhoto(
-                coverUrl == null || coverUrl.trim().isEmpty
-                    ? ''
-                    : _resolveUrl(context, coverUrl),
-                _resolveUrl(context, videoUrl),
-              ),
+          : () {
+              unawaited(
+                onOpenDynamicPhoto(
+                  coverUrl == null || coverUrl.trim().isEmpty
+                      ? ''
+                      : _resolveUrl(context, coverUrl),
+                  _resolveUrl(context, videoUrl),
+                ),
+              );
+            },
       child: ClipRRect(
         borderRadius: BorderRadius.circular(14),
         child: SizedBox(
@@ -235,32 +240,28 @@ class MessageBubble extends StatelessWidget {
     required BoxFit fit,
   }) {
     if (localCoverBytes != null) {
-      return Container(
-        color: const Color(0xFFF3F4F6),
-        alignment: Alignment.center,
-        child: Image.memory(localCoverBytes!, fit: fit),
+      return Image.memory(
+        localCoverBytes!,
+        fit: fit,
+        gaplessPlayback: true,
       );
     }
     if (localCoverPath != null && localCoverPath!.trim().isNotEmpty) {
-      return Container(
-        color: const Color(0xFFF3F4F6),
-        alignment: Alignment.center,
-        child: Image.file(File(localCoverPath!), fit: fit),
+      return Image.file(
+        File(localCoverPath!),
+        fit: fit,
+        gaplessPlayback: true,
       );
     }
     if (url == null || url.trim().isEmpty) {
       return const _NeutralPlaceholder();
     }
-    return Container(
-      color: const Color(0xFFF3F4F6),
-      alignment: Alignment.center,
-      child: CachedNetworkImage(
-        imageUrl: _resolveUrl(context, url),
-        fit: fit,
-        fadeInDuration: const Duration(milliseconds: 120),
-        placeholder: (_, __) => const _NeutralPlaceholder(),
-        errorWidget: (_, __, ___) => const _NeutralPlaceholder(),
-      ),
+    return Image(
+      image: CachedNetworkImageProvider(_resolveUrl(context, url)),
+      fit: fit,
+      gaplessPlayback: true,
+      filterQuality: FilterQuality.medium,
+      errorBuilder: (_, __, ___) => const _NeutralPlaceholder(),
     );
   }
 
