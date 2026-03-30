@@ -30,15 +30,18 @@ class _ChatScreenState extends State<ChatScreen> {
 
   final List<ChatMessage> _messages = [];
   final Set<int> _coverRefreshing = <int>{};
+  static const int _maxConcurrentCoverRefresh = 2;
   StreamSubscription<ChatMessage>? _msgSub;
   bool _loading = true;
   bool _sending = false;
   String? _error;
   int _lastMessageId = 0;
+  bool _userAtBottom = true;
 
   @override
   void initState() {
     super.initState();
+    _scrollCtrl.addListener(_onScroll);
     _init();
   }
 
@@ -47,8 +50,17 @@ class _ChatScreenState extends State<ChatScreen> {
     _msgSub?.cancel();
     _msgSub = null;
     _textCtrl.dispose();
+    _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollCtrl.hasClients) return;
+    final max = _scrollCtrl.position.maxScrollExtent;
+    final cur = _scrollCtrl.position.pixels;
+    // 小阈值保证用户在“底部附近”仍允许自动滚动更新
+    _userAtBottom = (max - cur) <= 80.0;
   }
 
   Future<void> _init() async {
@@ -67,6 +79,17 @@ class _ChatScreenState extends State<ChatScreen> {
       await _markAllRead(session.userId);
       state.clearUnread(widget.peerId);
       _subscribeToEvents(state, session.userId);
+
+      // 兜底：补齐历史里 VIDEO 封面（coverUrl 可能因 pending/时序未刷新）
+      final pendingVideos = _messages
+          .where((m) =>
+              m.type.toUpperCase() == 'VIDEO' &&
+              (m.coverUrl == null || m.coverUrl!.isEmpty))
+          .take(3)
+          .toList();
+      for (final m in pendingVideos) {
+        _maybeRefreshVideoCover(m);
+      }
     } catch (e) {
       _error = _toUserError(e);
     } finally {
@@ -92,8 +115,16 @@ class _ChatScreenState extends State<ChatScreen> {
           _messages[idx] = m;
         } else {
           _messages.add(m);
+          // 大多数情况下新消息 id 单调递增，不需要每次全量 sort；
+          // 仅在出现异常顺序时再排序以避免展示错乱。
+          if (_messages.length >= 2) {
+            final last = _messages.last.id;
+            final prev = _messages[_messages.length - 2].id;
+            if (prev > last) {
+              _messages.sort((a, b) => a.id.compareTo(b.id));
+            }
+          }
         }
-        _messages.sort((a, b) => a.id.compareTo(b.id));
       });
       _maybeRefreshVideoCover(m);
       if (m.senderId == widget.peerId) {
@@ -149,14 +180,17 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_userAtBottom) return;
       if (!_scrollCtrl.hasClients) return;
       final max = _scrollCtrl.position.maxScrollExtent;
       _scrollCtrl.jumpTo(max);
       Future<void>.delayed(const Duration(milliseconds: 120), () {
+        if (!_userAtBottom) return;
         if (!_scrollCtrl.hasClients) return;
         _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
       });
       Future<void>.delayed(const Duration(milliseconds: 320), () {
+        if (!_userAtBottom) return;
         if (!_scrollCtrl.hasClients) return;
         _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
       });
@@ -188,7 +222,6 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       setState(() {
         _messages.add(msg);
-        _messages.sort((a, b) => a.id.compareTo(b.id));
       });
       _scrollToBottom();
     } catch (e) {
@@ -628,6 +661,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final coverId = m.resourceId;
     if (coverId == null) return;
     if (_coverRefreshing.contains(m.id)) return;
+    // 防止多个封面同时轮询导致网络/主线程抖动
+    if (_coverRefreshing.length >= _maxConcurrentCoverRefresh) return;
     _coverRefreshing.add(m.id);
     _refreshVideoCover(messageId: m.id, coverId: coverId).whenComplete(() {
       _coverRefreshing.remove(m.id);

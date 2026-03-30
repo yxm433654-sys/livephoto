@@ -87,6 +87,9 @@ class MessageBubble extends StatelessWidget {
 
   Widget _content(
       BuildContext context, double mediaWidth, double maxMediaHeight) {
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    final cacheW = math.max(1, (mediaWidth * dpr).round());
+    final cacheH = math.max(1, (maxMediaHeight * dpr).round());
     final t = message.type.toUpperCase();
     if (t == 'TEXT') {
       return _TextBubble(text: message.content ?? '', isMine: isMine);
@@ -109,6 +112,9 @@ class MessageBubble extends StatelessWidget {
               resolved,
               fit: BoxFit.contain,
               alignment: Alignment.center,
+              cacheWidth: cacheW,
+              cacheHeight: cacheH,
+              filterQuality: FilterQuality.low,
               errorBuilder: (_, __, ___) =>
                   const ColoredBox(color: Colors.black12),
             ),
@@ -137,13 +143,14 @@ class MessageBubble extends StatelessWidget {
     if (t == 'DYNAMIC_PHOTO') {
       final cover = message.coverUrl;
       final video = message.videoUrl;
-      if (cover == null || cover.isEmpty || video == null || video.isEmpty) {
-        return const Text('动态图片不可用');
-      }
+      if (cover == null || cover.isEmpty) return const Text('动态图片不可用');
       final resolvedCover = _resolveUrl(context, cover);
-      final resolvedVideo = _resolveUrl(context, video);
+      final resolvedVideo =
+          (video == null || video.isEmpty) ? null : _resolveUrl(context, video);
       return GestureDetector(
-        onTap: () => onOpenDynamicPhoto(resolvedCover, resolvedVideo),
+        onTap: resolvedVideo == null
+            ? null
+            : () => onOpenDynamicPhoto(resolvedCover, resolvedVideo),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(10),
           child: ConstrainedBox(
@@ -159,6 +166,9 @@ class MessageBubble extends StatelessWidget {
                   resolvedCover,
                   fit: BoxFit.contain,
                   alignment: Alignment.center,
+                  cacheWidth: cacheW,
+                  cacheHeight: cacheH,
+                  filterQuality: FilterQuality.low,
                   errorBuilder: (_, __, ___) =>
                       const ColoredBox(color: Colors.black12),
                 ),
@@ -211,6 +221,9 @@ class MessageBubble extends StatelessWidget {
                   coverUrl,
                   fit: BoxFit.contain,
                   alignment: Alignment.center,
+                  cacheWidth: mediaWidth.round(),
+                  cacheHeight: maxMediaHeight.round(),
+                  filterQuality: FilterQuality.low,
                   errorBuilder: (_, __, ___) =>
                       const ColoredBox(color: Colors.black12),
                 ),
