@@ -1,8 +1,9 @@
-import 'dart:math' as math;
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:dynamic_photo_chat_flutter/models/chat_media.dart';
 import 'package:dynamic_photo_chat_flutter/models/message.dart';
 import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
 import 'package:flutter/material.dart';
@@ -23,8 +24,6 @@ class MessageBubble extends StatelessWidget {
     required this.onOpenDynamicPhoto,
     this.localCoverBytes,
     this.localCoverPath,
-    this.videoCoverWaitProgress,
-    this.videoAspectRatio,
   });
 
   final ChatMessage message;
@@ -38,15 +37,12 @@ class MessageBubble extends StatelessWidget {
   final void Function(String coverUrl, String videoUrl) onOpenDynamicPhoto;
   final Uint8List? localCoverBytes;
   final String? localCoverPath;
-  final double? videoCoverWaitProgress;
-  final double? videoAspectRatio;
 
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     final screenW = mq.size.width;
     final screenH = mq.size.height;
-    // 与微信会话内图片/视频接近：宽度约半屏、上限 240dp；竖图高度按宽高比收紧
     final mediaWidth = math.min(screenW * 0.48, 240.0);
     final maxMediaHeight = math.min(screenH * 0.36, mediaWidth * 1.75);
     final time = message.createdAt == null
@@ -56,7 +52,7 @@ class MessageBubble extends StatelessWidget {
     final avatar = _Avatar(
       name: isMine ? myName : peerName,
       avatarUrl: isMine ? myAvatarUrl : peerAvatarUrl,
-      seed: isMine ? message.senderId : message.senderId,
+      seed: message.senderId,
     );
 
     final bubble = _content(context, mediaWidth, maxMediaHeight);
@@ -101,6 +97,8 @@ class MessageBubble extends StatelessWidget {
     final dpr = MediaQuery.of(context).devicePixelRatio;
     final cacheW = math.max(1, (mediaWidth * dpr).round());
     final t = message.type.toUpperCase();
+    final media = message.media;
+
     if (t == 'TEXT') {
       return _TextBubble(text: message.content ?? '', isMine: isMine);
     }
@@ -110,9 +108,7 @@ class MessageBubble extends StatelessWidget {
       final localPath = localCoverPath;
       if (localBytes != null) {
         return GestureDetector(
-          onTap: () {
-            // 发送端本地预览：不走服务端
-          },
+          onTap: () {},
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: ConstrainedBox(
@@ -141,7 +137,7 @@ class MessageBubble extends StatelessWidget {
         );
       }
 
-      final url = message.coverUrl;
+      final url = media?.coverUrl ?? message.coverUrl;
       if (url == null || url.trim().isEmpty) return const Text('图片不可用');
       final resolved = _resolveUrl(context, url);
       return GestureDetector(
@@ -153,7 +149,7 @@ class MessageBubble extends StatelessWidget {
               maxWidth: mediaWidth,
               maxHeight: maxMediaHeight,
             ),
-            child: _networkImageWithProgress(
+            child: _networkImage(
               url: resolved,
               cacheWidth: cacheW,
             ),
@@ -163,74 +159,70 @@ class MessageBubble extends StatelessWidget {
     }
 
     if (t == 'VIDEO') {
-      final video = message.videoUrl;
-      final cover = message.coverUrl;
+      final video = media?.playUrl ?? message.videoUrl;
+      final cover = media?.coverUrl ?? message.coverUrl;
       if ((video == null || video.isEmpty) &&
           (cover == null || cover.isEmpty)) {
         return const Text('视频不可用');
       }
 
-      // 发送端：优先展示本地缩略图作为占位，不依赖服务端封面。
       ImageProvider? localProvider;
-      final localBytes = localCoverBytes;
-      final localPath = localCoverPath;
-      if (localBytes != null) {
-        localProvider = MemoryImage(localBytes);
-      } else if (localPath != null && localPath.trim().isNotEmpty) {
-        localProvider = FileImage(File(localPath));
+      if (localCoverBytes != null) {
+        localProvider = MemoryImage(localCoverBytes!);
+      } else if (localCoverPath != null && localCoverPath!.trim().isNotEmpty) {
+        localProvider = FileImage(File(localCoverPath!));
       }
+
       return _videoPreview(
         mediaWidth: mediaWidth,
         maxMediaHeight: maxMediaHeight,
-        // 列表不触发视频下载，只有点详情才会下载/播放
         videoUrl: video == null || video.isEmpty ? null : _resolveUrl(context, video),
-        coverUrl:
-            localProvider != null
+        coverUrl: localProvider != null
+            ? null
+            : (cover == null || cover.trim().isEmpty
                 ? null
-                : (cover == null || cover.trim().isEmpty
-                    ? null
-                    : _resolveUrl(context, cover)),
+                : _resolveUrl(context, cover)),
         localCoverProvider: localProvider,
-        coverWaitProgress: videoCoverWaitProgress,
-        videoAspectRatio: videoAspectRatio,
+        processingStatus: media?.processingStatus,
+        aspectRatio: _resolveAspectRatio(media, fallback: 9 / 16),
       );
     }
 
     if (t == 'DYNAMIC_PHOTO') {
-      final cover = message.coverUrl;
-      final video = message.videoUrl;
-      final localBytes = localCoverBytes;
-      final localPath = localCoverPath;
+      final cover = media?.coverUrl ?? message.coverUrl;
+      final video = media?.playUrl ?? message.videoUrl;
+      final processingStatus = media?.processingStatus;
 
       Widget coverWidget;
-      if (localBytes != null) {
-        coverWidget = Image.memory(localBytes, fit: BoxFit.cover);
-      } else if (localPath != null && localPath.trim().isNotEmpty) {
-        coverWidget = Image.file(File(localPath), fit: BoxFit.cover);
-      } else {
-        if (cover == null || cover.trim().isEmpty) {
-          return const Text('动态图片不可用');
-        }
-        final resolvedCover = _resolveUrl(context, cover);
-        coverWidget = _networkImageWithProgress(
-          url: resolvedCover,
+      if (localCoverBytes != null) {
+        coverWidget = Image.memory(localCoverBytes!, fit: BoxFit.cover);
+      } else if (localCoverPath != null && localCoverPath!.trim().isNotEmpty) {
+        coverWidget = Image.file(File(localCoverPath!), fit: BoxFit.cover);
+      } else if (cover != null && cover.trim().isNotEmpty) {
+        coverWidget = _networkImage(
+          url: _resolveUrl(context, cover),
           cacheWidth: cacheW,
+        );
+      } else {
+        coverWidget = _mediaPlaceholder(
+          mediaWidth: mediaWidth,
+          maxMediaHeight: maxMediaHeight,
+          aspectRatio: _resolveAspectRatio(media, fallback: 3 / 4),
         );
       }
 
-      final resolvedVideo =
-          (video == null || video.trim().isEmpty)
-              ? null
-              : _resolveUrl(context, video);
+      final resolvedVideo = (video == null || video.trim().isEmpty)
+          ? null
+          : _resolveUrl(context, video);
+
       return GestureDetector(
         onTap: resolvedVideo == null
             ? null
             : () {
-                // 进入详情后再下载视频
-                final srvCover = (cover == null || cover.trim().isEmpty)
+                final resolvedCover = (cover == null || cover.trim().isEmpty)
                     ? ''
                     : _resolveUrl(context, cover);
-                onOpenDynamicPhoto(srvCover, resolvedVideo);
+                onOpenDynamicPhoto(resolvedCover, resolvedVideo);
               },
         child: ClipRRect(
           borderRadius: BorderRadius.circular(10),
@@ -244,7 +236,9 @@ class MessageBubble extends StatelessWidget {
               alignment: Alignment.center,
               children: [
                 coverWidget,
-                Positioned(
+                if ((processingStatus ?? '').toUpperCase() == 'PROCESSING')
+                  _statusOverlay('处理中'),
+                const Positioned(
                   right: 8,
                   top: 8,
                   child: _LiveBadge(),
@@ -265,8 +259,8 @@ class MessageBubble extends StatelessWidget {
     required String? videoUrl,
     required String? coverUrl,
     required ImageProvider? localCoverProvider,
-    required double? coverWaitProgress,
-    required double? videoAspectRatio,
+    required String? processingStatus,
+    required double aspectRatio,
   }) {
     return GestureDetector(
       onTap: videoUrl == null ? null : () => onPlayVideo(videoUrl),
@@ -289,22 +283,13 @@ class MessageBubble extends StatelessWidget {
                   height: double.infinity,
                 )
               else if (coverUrl == null)
-                Builder(builder: (_) {
-                  // 占位期间封面不存在：用视频宽高比推导出等比占位尺寸，避免“比例被写死导致看起来变形”。
-                  final ar = videoAspectRatio ?? 9 / 16;
-                  final preferredH = mediaWidth / ar;
-                  final actualH =
-                      preferredH <= maxMediaHeight ? preferredH : maxMediaHeight;
-                  final actualW = actualH * ar;
-
-                  return SizedBox(
-                    width: actualW,
-                    height: actualH,
-                    child: const ColoredBox(color: Colors.black12),
-                  );
-                })
+                _mediaPlaceholder(
+                  mediaWidth: mediaWidth,
+                  maxMediaHeight: maxMediaHeight,
+                  aspectRatio: aspectRatio,
+                )
               else
-                _networkImageWithProgress(
+                _networkImage(
                   url: coverUrl,
                   cacheWidth: mediaWidth.round(),
                 ),
@@ -320,36 +305,8 @@ class MessageBubble extends StatelessWidget {
                       color: Colors.white, size: 28),
                 ),
               ),
-              if (localCoverProvider == null && coverUrl == null)
-                Positioned(
-                  right: 8,
-                  top: 8,
-                  child: SizedBox(
-                    width: 68,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        LinearProgressIndicator(
-                          value: coverWaitProgress?.clamp(0, 1),
-                          minHeight: 4,
-                          backgroundColor: Colors.black12,
-                        ),
-                        if (coverWaitProgress != null)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: Text(
-                              '${(coverWaitProgress * 100).clamp(0, 100).round()}%',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                color: Color(0xFF6B7280),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
+              if ((processingStatus ?? '').toUpperCase() == 'PROCESSING')
+                Positioned(bottom: 8, child: _pill('处理中')),
             ],
           ),
         ),
@@ -357,12 +314,10 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  Widget _networkImageWithProgress({
+  Widget _networkImage({
     required String url,
     required int cacheWidth,
   }) {
-    // 使用磁盘缓存，避免列表下滑回滚反复重新拉取。
-    // 微信风格：加载中只显示占位，不展示百分比进度条。
     return CachedNetworkImage(
       imageUrl: url,
       memCacheWidth: cacheWidth,
@@ -377,6 +332,65 @@ class MessageBubble extends StatelessWidget {
       placeholder: (_, __) => const ColoredBox(color: Colors.black12),
       errorWidget: (_, __, ___) => const ColoredBox(color: Colors.black12),
     );
+  }
+
+  Widget _mediaPlaceholder({
+    required double mediaWidth,
+    required double maxMediaHeight,
+    required double aspectRatio,
+  }) {
+    final normalized = aspectRatio.isFinite && aspectRatio > 0
+        ? aspectRatio
+        : 9 / 16;
+    final preferredH = mediaWidth / normalized;
+    final actualH = preferredH <= maxMediaHeight ? preferredH : maxMediaHeight;
+    final actualW = actualH * normalized;
+    return SizedBox(
+      width: actualW,
+      height: actualH,
+      child: const ColoredBox(color: Colors.black12),
+    );
+  }
+
+  Widget _statusOverlay(String text) {
+    return Positioned.fill(
+      child: Container(
+        color: Colors.black.withOpacity(0.12),
+        alignment: Alignment.center,
+        child: _pill(text),
+      ),
+    );
+  }
+
+  Widget _pill(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.42),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  double _resolveAspectRatio(ChatMedia? media, {required double fallback}) {
+    final ratio = media?.aspectRatio;
+    if (ratio != null && ratio.isFinite && ratio > 0) {
+      return ratio;
+    }
+    final width = media?.width;
+    final height = media?.height;
+    if (width != null && height != null && width > 0 && height > 0) {
+      return width / height;
+    }
+    return fallback;
   }
 
   String _resolveUrl(BuildContext context, String url) {
@@ -470,6 +484,8 @@ class _Avatar extends StatelessWidget {
 }
 
 class _LiveBadge extends StatelessWidget {
+  const _LiveBadge();
+
   @override
   Widget build(BuildContext context) {
     return Container(

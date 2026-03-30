@@ -1,7 +1,7 @@
-import 'dart:async';
-import 'dart:io';
+﻿import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:dynamic_photo_chat_flutter/models/chat_media.dart';
 import 'package:dynamic_photo_chat_flutter/models/file_upload_response.dart';
 import 'package:dynamic_photo_chat_flutter/models/message.dart';
 import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
@@ -9,13 +9,10 @@ import 'package:dynamic_photo_chat_flutter/ui/screens/dynamic_photo_screen.dart'
 import 'package:dynamic_photo_chat_flutter/ui/screens/video_player_screen.dart';
 import 'package:dynamic_photo_chat_flutter/ui/widgets/message_bubble.dart';
 import 'package:dynamic_photo_chat_flutter/utils/live_photo_detector.dart';
-import 'package:dynamic_photo_chat_flutter/utils/media_downloader.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:provider/provider.dart';
-import 'package:video_player/video_player.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key, required this.peerId});
@@ -27,25 +24,21 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
-  final _textCtrl = TextEditingController();
-  final _scrollCtrl = ScrollController();
+  final TextEditingController _textCtrl = TextEditingController();
+  final ScrollController _scrollCtrl = ScrollController();
   final ImagePicker _picker = ImagePicker();
 
-  final List<ChatMessage> _messages = [];
+  final List<ChatMessage> _messages = <ChatMessage>[];
   final Map<int, Uint8List> _localCoverBytesByMessageId = <int, Uint8List>{};
   final Map<int, String> _localCoverPathByMessageId = <int, String>{};
-  final Set<int> _coverRefreshing = <int>{};
-  static const int _maxConcurrentCoverRefresh = 2;
-  final Map<int, double> _videoCoverWaitProgress = <int, double>{};
-  final Map<int, double> _videoAspectRatios = <int, double>{};
-  final Set<int> _aspectRatioRefreshing = <int>{};
-  static const int _maxConcurrentAspectRefresh = 2;
+
   StreamSubscription<ChatMessage>? _msgSub;
   bool _loading = true;
   bool _sending = false;
   String? _error;
   int _lastMessageId = 0;
   bool _userAtBottom = true;
+  int _tempMessageSeed = -1;
 
   @override
   void initState() {
@@ -57,7 +50,6 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _msgSub?.cancel();
-    _msgSub = null;
     _textCtrl.dispose();
     _scrollCtrl.removeListener(_onScroll);
     _scrollCtrl.dispose();
@@ -68,337 +60,685 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!_scrollCtrl.hasClients) return;
     final max = _scrollCtrl.position.maxScrollExtent;
     final cur = _scrollCtrl.position.pixels;
-    // 小阈值保证用户在“底部附近”仍允许自动滚动更新
     _userAtBottom = (max - cur) <= 80.0;
   }
 
   Future<void> _init() async {
     final state = context.read<AppState>();
-    final session = state.session!;
+    final session = state.session;
+    if (session == null) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Please login again.';
+      });
+      return;
+    }
+
     try {
       state.prefetchUser(widget.peerId);
       final history = await state.messages.history(
-          userId: session.userId, peerId: widget.peerId, page: 0, size: 100);
+        userId: session.userId,
+        peerId: widget.peerId,
+        page: 0,
+        size: 100,
+      );
+      history.sort((a, b) => a.id.compareTo(b.id));
+
       _messages
         ..clear()
         ..addAll(history);
       _lastMessageId = _messages.isEmpty
           ? 0
           : _messages.map((e) => e.id).reduce((a, b) => a > b ? a : b);
+
       await _markAllRead(session.userId);
       state.clearUnread(widget.peerId);
       _subscribeToEvents(state, session.userId);
-
-      // 兜底：补齐历史里 VIDEO 封面（coverUrl 可能因 pending/时序未刷新）
-      final pendingVideos = _messages
-          .where((m) =>
-              m.type.toUpperCase() == 'VIDEO' &&
-              (m.coverUrl == null || m.coverUrl!.trim().isEmpty))
-          .take(3)
-          .toList();
-      for (final m in pendingVideos) {
-        _maybeRefreshVideoCover(m);
-        _maybeInferVideoAspectRatio(m);
-      }
     } catch (e) {
       _error = _toUserError(e);
     } finally {
       if (mounted) {
         setState(() => _loading = false);
-        _scrollToBottom();
+        _scrollToBottom(animated: false);
       }
     }
   }
 
   void _subscribeToEvents(AppState state, int myId) {
     _msgSub?.cancel();
-    _msgSub = state.messageEvents.listen((m) async {
+    _msgSub = state.messageEvents.listen((message) async {
       if (!mounted) return;
-      if (m.id > _lastMessageId) _lastMessageId = m.id;
-      final isInThisChat =
-          (m.senderId == widget.peerId && m.receiverId == myId) ||
-              (m.senderId == myId && m.receiverId == widget.peerId);
-      if (!isInThisChat) return;
-      final idx = _messages.indexWhere((e) => e.id == m.id);
+      if (!_isInThisChat(message, myId)) return;
+
+      if (message.id > _lastMessageId) {
+        _lastMessageId = message.id;
+      }
+
+      final idx = _messages.indexWhere((e) => e.id == message.id);
       setState(() {
         if (idx >= 0) {
-          _messages[idx] = m;
+          _messages[idx] = message;
         } else {
-          _messages.add(m);
-          // 大多数情况下新消息 id 单调递增，不需要每次全量 sort；
-          // 仅在出现异常顺序时再排序以避免展示错乱。
-          if (_messages.length >= 2) {
-            final last = _messages.last.id;
-            final prev = _messages[_messages.length - 2].id;
-            if (prev > last) {
-              _messages.sort((a, b) => a.id.compareTo(b.id));
-            }
-          }
+          _messages.add(message);
+          _messages.sort((a, b) => a.id.compareTo(b.id));
         }
+        _dropLocalPreviewIfRemoteReady(message);
       });
-      _maybeRefreshVideoCover(m);
-      _maybeInferVideoAspectRatio(m);
-      if (m.senderId == widget.peerId) {
+
+      if (message.receiverId == myId) {
+        await _markMessageRead(message, myId);
         state.clearUnread(widget.peerId);
-        await _markAllRead(myId);
       }
-      _scrollToBottom();
-    }, onError: (e) {
-      if (!mounted) return;
-      setState(() => _error = _toUserError(e));
+
+      if (_userAtBottom || message.senderId == myId) {
+        _scrollToBottom();
+      }
     });
   }
 
-  String _toUserError(Object e) {
-    final raw = e.toString();
-    final lower = raw.toLowerCase();
-    if (lower.contains('socketexception') ||
-        lower.contains('connection refused') ||
-        lower.contains('network')) {
-      return '连接失败，请在登录页右上角设置API地址为电脑局域网IP（例如 http://192.168.x.x:8080）';
-    }
-    return raw;
+  bool _isInThisChat(ChatMessage message, int myId) {
+    final fromPeer =
+        message.senderId == widget.peerId && message.receiverId == myId;
+    final fromMe =
+        message.senderId == myId && message.receiverId == widget.peerId;
+    return fromPeer || fromMe;
   }
 
   Future<void> _markAllRead(int myId) async {
-    final state = context.read<AppState>();
-    final unread = _messages
-        .where((m) => m.receiverId == myId && (m.status ?? '') != 'READ')
-        .toList();
-    for (final m in unread) {
-      try {
-        await state.messages.markRead(m.id);
-        final idx = _messages.indexWhere((e) => e.id == m.id);
-        if (idx >= 0) {
-          _messages[idx] = ChatMessage(
-            id: m.id,
-            senderId: m.senderId,
-            receiverId: m.receiverId,
-            type: m.type,
-            content: m.content,
-            resourceId: m.resourceId,
-            videoResourceId: m.videoResourceId,
-            coverUrl: m.coverUrl,
-            videoUrl: m.videoUrl,
-            status: 'READ',
-            createdAt: m.createdAt,
-          );
-        }
-      } catch (_) {}
+    for (final message in _messages) {
+      await _markMessageRead(message, myId);
     }
-    if (mounted) setState(() {});
   }
 
-  void _scrollToBottom() {
+  Future<void> _markMessageRead(ChatMessage message, int myId) async {
+    if (message.receiverId != myId) return;
+    if ((message.status ?? '').toUpperCase() == 'READ') return;
+    try {
+      await context.read<AppState>().messages.markRead(message.id);
+    } catch (_) {}
+  }
+
+  void _scrollToBottom({bool animated = true}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_userAtBottom) return;
-      if (!_scrollCtrl.hasClients) return;
-      final max = _scrollCtrl.position.maxScrollExtent;
-      _scrollCtrl.jumpTo(max);
-      Future<void>.delayed(const Duration(milliseconds: 120), () {
-        if (!_userAtBottom) return;
-        if (!_scrollCtrl.hasClients) return;
-        _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
-      });
-      Future<void>.delayed(const Duration(milliseconds: 320), () {
-        if (!_userAtBottom) return;
-        if (!_scrollCtrl.hasClients) return;
-        _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
-      });
+      if (!mounted || !_scrollCtrl.hasClients) return;
+      final target = _scrollCtrl.position.maxScrollExtent;
+      if (animated) {
+        _scrollCtrl.animateTo(
+          target,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+        );
+      } else {
+        _scrollCtrl.jumpTo(target);
+      }
     });
   }
 
+  String _toUserError(Object error) {
+    final text = error.toString().trim();
+    if (text.startsWith('Exception: ')) {
+      return text.substring('Exception: '.length);
+    }
+    return text;
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  int _nextTempId() {
+    final id = _tempMessageSeed;
+    _tempMessageSeed -= 1;
+    return id;
+  }
+
+  ChatMessage _buildLocalMessage({
+    required int id,
+    required int senderId,
+    required String type,
+    String? content,
+    int? resourceId,
+    int? videoResourceId,
+    String? coverUrl,
+    String? videoUrl,
+    ChatMedia? media,
+    String? status,
+  }) {
+    return ChatMessage(
+      id: id,
+      senderId: senderId,
+      receiverId: widget.peerId,
+      type: type,
+      content: content,
+      resourceId: resourceId,
+      videoResourceId: videoResourceId,
+      coverUrl: coverUrl,
+      videoUrl: videoUrl,
+      media: media,
+      status: status,
+      createdAt: DateTime.now(),
+    );
+  }
+
+  void _insertLocalMessage(
+    ChatMessage message, {
+    Uint8List? localCoverBytes,
+    String? localCoverPath,
+  }) {
+    setState(() {
+      _messages.add(message);
+      _messages.sort((a, b) => a.id.compareTo(b.id));
+      if (localCoverBytes != null) {
+        _localCoverBytesByMessageId[message.id] = localCoverBytes;
+      }
+      if (localCoverPath != null && localCoverPath.trim().isNotEmpty) {
+        _localCoverPathByMessageId[message.id] = localCoverPath;
+      }
+    });
+    _scrollToBottom();
+  }
+
+  void _replaceMessage(int tempId, ChatMessage message) {
+    final idx = _messages.indexWhere((e) => e.id == tempId);
+    if (idx < 0) return;
+    final localBytes = _localCoverBytesByMessageId.remove(tempId);
+    final localPath = _localCoverPathByMessageId.remove(tempId);
+    setState(() {
+      _messages[idx] = message;
+      if (localBytes != null) {
+        _localCoverBytesByMessageId[message.id] = localBytes;
+      }
+      if (localPath != null) {
+        _localCoverPathByMessageId[message.id] = localPath;
+      }
+    });
+  }
+
+  void _removeLocalMessage(int tempId) {
+    setState(() {
+      _messages.removeWhere((e) => e.id == tempId);
+      _localCoverBytesByMessageId.remove(tempId);
+      _localCoverPathByMessageId.remove(tempId);
+    });
+  }
+
+  void _dropLocalPreviewIfRemoteReady(ChatMessage message) {
+    final hasRemoteCover =
+        (message.media?.coverUrl ?? message.coverUrl)?.trim().isNotEmpty == true;
+    final hasRemoteImage =
+        (message.media?.coverUrl ?? message.coverUrl)?.trim().isNotEmpty == true;
+    final hasRemoteVideo =
+        (message.media?.playUrl ?? message.videoUrl)?.trim().isNotEmpty == true;
+    final type = message.type.toUpperCase();
+    if (type == 'IMAGE' && hasRemoteImage) {
+      _localCoverBytesByMessageId.remove(message.id);
+      _localCoverPathByMessageId.remove(message.id);
+    }
+    if ((type == 'VIDEO' || type == 'DYNAMIC_PHOTO') && hasRemoteCover && hasRemoteVideo) {
+      _localCoverBytesByMessageId.remove(message.id);
+      _localCoverPathByMessageId.remove(message.id);
+    }
+  }
+
+  ChatMedia _buildImageMedia(FileUploadResponse upload) {
+    return ChatMedia(
+      mediaKind: 'IMAGE',
+      processingStatus: 'READY',
+      resourceId: upload.fileId,
+      coverResourceId: upload.fileId,
+      playResourceId: upload.fileId,
+      coverUrl: upload.url,
+      playUrl: upload.url,
+      width: upload.width,
+      height: upload.height,
+      duration: upload.duration,
+      aspectRatio: _aspectRatio(upload.width, upload.height, 1.0),
+      sourceType: upload.sourceType,
+    );
+  }
+
+  ChatMedia _buildVideoMedia(
+    FileUploadResponse upload, {
+    String processingStatus = 'PROCESSING',
+  }) {
+    final coverId = upload.coverId;
+    final playId = upload.videoId ?? upload.fileId;
+    return ChatMedia(
+      mediaKind: 'VIDEO',
+      processingStatus: processingStatus,
+      resourceId: playId,
+      coverResourceId: coverId,
+      playResourceId: playId,
+      coverUrl: upload.coverUrl,
+      playUrl: upload.videoUrl ?? upload.url,
+      width: upload.width,
+      height: upload.height,
+      duration: upload.duration,
+      aspectRatio: _aspectRatio(upload.width, upload.height, 9 / 16),
+      sourceType: upload.sourceType,
+    );
+  }
+
+  ChatMedia _buildDynamicMedia(
+    FileUploadResponse upload, {
+    String processingStatus = 'PROCESSING',
+  }) {
+    return ChatMedia(
+      mediaKind: 'DYNAMIC_PHOTO',
+      processingStatus: processingStatus,
+      resourceId: upload.coverId,
+      coverResourceId: upload.coverId,
+      playResourceId: upload.videoId,
+      coverUrl: upload.coverUrl,
+      playUrl: upload.videoUrl,
+      width: upload.width,
+      height: upload.height,
+      duration: upload.duration,
+      aspectRatio: _aspectRatio(upload.width, upload.height, 3 / 4),
+      sourceType: upload.sourceType,
+    );
+  }
+
+  double _aspectRatio(int? width, int? height, double fallback) {
+    if (width != null && height != null && width > 0 && height > 0) {
+      return width / height;
+    }
+    return fallback;
+  }
+
   Future<void> _sendText() async {
+    if (_sending) return;
     final text = _textCtrl.text.trim();
     if (text.isEmpty) return;
+
     final state = context.read<AppState>();
-    final session = state.session!;
-    setState(() => _sending = true);
-    try {
-      final id = await state.messages.sendText(
-          senderId: session.userId, receiverId: widget.peerId, content: text);
-      _textCtrl.clear();
-      final msg = ChatMessage(
-        id: id,
-        senderId: session.userId,
-        receiverId: widget.peerId,
-        type: 'TEXT',
-        content: text,
-        resourceId: null,
-        videoResourceId: null,
-        coverUrl: null,
-        videoUrl: null,
-        status: 'SENT',
-        createdAt: DateTime.now(),
-      );
-      setState(() {
-        _messages.add(msg);
-      });
-      _scrollToBottom();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.toString())));
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
-  }
+    final session = state.session;
+    if (session == null) return;
 
-  Future<void> _pickFromGallery() async {
-    if (_sending) return;
-
-    final result = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                leading: const Icon(Icons.photo_library),
-                title: const Text('选择照片'),
-                onTap: () => Navigator.of(ctx).pop('image'),
-              ),
-              ListTile(
-                leading: const Icon(Icons.video_library),
-                title: const Text('选择视频'),
-                onTap: () => Navigator.of(ctx).pop('video'),
-              ),
-              const SizedBox(height: 12),
-            ],
-          ),
-        );
-      },
+    final tempId = _nextTempId();
+    final tempMessage = _buildLocalMessage(
+      id: tempId,
+      senderId: session.userId,
+      type: 'TEXT',
+      content: text,
+      status: 'SENDING',
     );
 
-    if (result == null || !mounted) return;
+    _textCtrl.clear();
+    _insertLocalMessage(tempMessage);
 
-    setState(() => _sending = true);
+    setState(() {
+      _sending = true;
+      _error = null;
+    });
+
     try {
-      if (result == 'image') {
-        await _pickImage();
-      } else {
-        await _pickVideo();
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('上传失败: ${_toUserError(e)}')),
+      final messageId = await state.messages.sendText(
+        senderId: session.userId,
+        receiverId: widget.peerId,
+        content: text,
       );
+      _replaceMessage(
+        tempId,
+        _buildLocalMessage(
+          id: messageId,
+          senderId: session.userId,
+          type: 'TEXT',
+          content: text,
+          status: 'SENT',
+        ),
+      );
+    } catch (e) {
+      _removeLocalMessage(tempId);
+      _textCtrl.text = text;
+      _showSnack(_toUserError(e));
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) {
+        setState(() => _sending = false);
+      }
     }
   }
 
-  Future<void> _pickImage() async {
-    final PermissionState ps = await PhotoManager.requestPermissionExtend();
-    if (!ps.isAuth) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('需要相册权限')),
+  Future<void> _sendImageFromPath({
+    required String filePath,
+    Uint8List? previewBytes,
+  }) async {
+    if (_sending) return;
+    final state = context.read<AppState>();
+    final session = state.session;
+    if (session == null) return;
+
+    final tempId = _nextTempId();
+    final tempMessage = _buildLocalMessage(
+      id: tempId,
+      senderId: session.userId,
+      type: 'IMAGE',
+      media: ChatMedia(
+        mediaKind: 'IMAGE',
+        processingStatus: 'PROCESSING',
+        resourceId: null,
+        coverResourceId: null,
+        playResourceId: null,
+        coverUrl: null,
+        playUrl: null,
+        width: null,
+        height: null,
+        duration: null,
+        aspectRatio: 1.0,
+        sourceType: null,
+      ),
+      status: 'SENDING',
+    );
+    _insertLocalMessage(
+      tempMessage,
+      localCoverBytes: previewBytes,
+      localCoverPath: filePath,
+    );
+
+    setState(() {
+      _sending = true;
+      _error = null;
+    });
+
+    try {
+      final upload = await state.files.uploadNormalFromPath(
+        filePath: filePath,
+        userId: session.userId,
+      );
+      final media = _buildImageMedia(upload);
+      final messageId = await state.messages.sendImage(
+        senderId: session.userId,
+        receiverId: widget.peerId,
+        resourceId: upload.fileId!,
+      );
+      _replaceMessage(
+        tempId,
+        _buildLocalMessage(
+          id: messageId,
+          senderId: session.userId,
+          type: 'IMAGE',
+          resourceId: upload.fileId,
+          coverUrl: upload.url,
+          videoUrl: upload.url,
+          media: media,
+          status: 'SENT',
+        ),
+      );
+    } catch (e) {
+      _removeLocalMessage(tempId);
+      _showSnack(_toUserError(e));
+    } finally {
+      if (mounted) {
+        setState(() => _sending = false);
+      }
+    }
+  }
+
+  Future<void> _sendVideoFromPath({
+    required String filePath,
+    Uint8List? previewBytes,
+  }) async {
+    if (_sending) return;
+    final state = context.read<AppState>();
+    final session = state.session;
+    if (session == null) return;
+
+    final tempId = _nextTempId();
+    final tempMessage = _buildLocalMessage(
+      id: tempId,
+      senderId: session.userId,
+      type: 'VIDEO',
+      media: ChatMedia(
+        mediaKind: 'VIDEO',
+        processingStatus: 'PROCESSING',
+        resourceId: null,
+        coverResourceId: null,
+        playResourceId: null,
+        coverUrl: null,
+        playUrl: null,
+        width: null,
+        height: null,
+        duration: null,
+        aspectRatio: 9 / 16,
+        sourceType: null,
+      ),
+      status: 'SENDING',
+    );
+    _insertLocalMessage(
+      tempMessage,
+      localCoverBytes: previewBytes,
+    );
+
+    setState(() {
+      _sending = true;
+      _error = null;
+    });
+
+    try {
+      final upload = await state.files.uploadNormalFromPath(
+        filePath: filePath,
+        userId: session.userId,
+      );
+      final playId = upload.videoId ?? upload.fileId;
+      if (playId == null) {
+        throw Exception('Video upload did not return a resource id.');
+      }
+      final messageId = await state.messages.sendVideo(
+        senderId: session.userId,
+        receiverId: widget.peerId,
+        videoResourceId: playId,
+        coverResourceId: upload.coverId,
+      );
+      _replaceMessage(
+        tempId,
+        _buildLocalMessage(
+          id: messageId,
+          senderId: session.userId,
+          type: 'VIDEO',
+          resourceId: upload.coverId,
+          videoResourceId: playId,
+          coverUrl: upload.coverUrl,
+          videoUrl: upload.videoUrl ?? upload.url,
+          media: _buildVideoMedia(upload),
+          status: 'SENT',
+        ),
+      );
+    } catch (e) {
+      _removeLocalMessage(tempId);
+      _showSnack(_toUserError(e));
+    } finally {
+      if (mounted) {
+        setState(() => _sending = false);
+      }
+    }
+  }
+
+  Future<void> _sendDynamicPhoto({
+    required String coverPath,
+    Uint8List? previewBytes,
+    required Future<FileUploadResponse> Function(int userId) upload,
+  }) async {
+    if (_sending) return;
+    final state = context.read<AppState>();
+    final session = state.session;
+    if (session == null) return;
+
+    final tempId = _nextTempId();
+    final tempMessage = _buildLocalMessage(
+      id: tempId,
+      senderId: session.userId,
+      type: 'DYNAMIC_PHOTO',
+      media: ChatMedia(
+        mediaKind: 'DYNAMIC_PHOTO',
+        processingStatus: 'PROCESSING',
+        resourceId: null,
+        coverResourceId: null,
+        playResourceId: null,
+        coverUrl: null,
+        playUrl: null,
+        width: null,
+        height: null,
+        duration: null,
+        aspectRatio: 3 / 4,
+        sourceType: null,
+      ),
+      status: 'SENDING',
+    );
+    _insertLocalMessage(
+      tempMessage,
+      localCoverBytes: previewBytes,
+      localCoverPath: coverPath,
+    );
+
+    setState(() {
+      _sending = true;
+      _error = null;
+    });
+
+    try {
+      final uploaded = await upload(session.userId);
+      if (uploaded.coverId == null || uploaded.videoId == null) {
+        throw Exception('Dynamic photo upload did not return full resources.');
+      }
+      final messageId = await state.messages.sendDynamicPhoto(
+        senderId: session.userId,
+        receiverId: widget.peerId,
+        coverId: uploaded.coverId!,
+        videoId: uploaded.videoId!,
+      );
+      _replaceMessage(
+        tempId,
+        _buildLocalMessage(
+          id: messageId,
+          senderId: session.userId,
+          type: 'DYNAMIC_PHOTO',
+          resourceId: uploaded.coverId,
+          videoResourceId: uploaded.videoId,
+          coverUrl: uploaded.coverUrl,
+          videoUrl: uploaded.videoUrl,
+          media: _buildDynamicMedia(uploaded),
+          status: 'SENT',
+        ),
+      );
+    } catch (e) {
+      _removeLocalMessage(tempId);
+      _showSnack(_toUserError(e));
+    } finally {
+      if (mounted) {
+        setState(() => _sending = false);
+      }
+    }
+  }
+
+  Future<void> _pickCameraImage() async {
+    final file = await _picker.pickImage(source: ImageSource.camera);
+    if (file == null) return;
+    await _sendImageFromPath(filePath: file.path);
+  }
+
+  Future<void> _pickCameraVideo() async {
+    final file = await _picker.pickVideo(source: ImageSource.camera);
+    if (file == null) return;
+    await _sendVideoFromPath(filePath: file.path);
+  }
+
+  Future<void> _pickGalleryImage() async {
+    final asset = await _pickAsset(AssetType.image);
+    if (asset == null) return;
+    final file = await asset.file;
+    if (file == null) {
+      _showSnack('Unable to read the selected file.');
+      return;
+    }
+
+    final previewBytes = await asset.thumbnailDataWithSize(
+      const ThumbnailSize(512, 512),
+    );
+
+    final live = await LivePhotoDetector.detectLivePhoto(asset);
+    if (live != null) {
+      await _sendDynamicPhoto(
+        coverPath: live.imagePath,
+        previewBytes: previewBytes,
+        upload: (userId) => context.read<AppState>().files.uploadLivePhotoAuto(
+              jpegPath: live.imagePath,
+              movPath: live.videoPath,
+              userId: userId,
+            ),
       );
       return;
     }
 
-    if (!mounted) return;
-    final state = context.read<AppState>();
-    final session = state.session!;
-
-    try {
-      if (Platform.isIOS) {
-        final asset = await _pickIosImageAsset();
-        if (asset == null || !mounted) return;
-
-        if (asset.isLivePhoto) {
-          final livePhotoInfo = await LivePhotoDetector.detectLivePhoto(asset);
-          if (livePhotoInfo != null) {
-            final uploaded = await state.files.uploadLivePhotoAuto(
-              jpegPath: livePhotoInfo.imagePath,
-              movPath: livePhotoInfo.videoPath,
-              userId: session.userId,
-            );
-            final mid = await _sendForDynamic(uploaded, session.userId);
-            _localCoverPathByMessageId[mid] = livePhotoInfo.imagePath;
-            return;
-          }
-        }
-
-        final f = await asset.file;
-        if (f == null) {
-          throw Exception('无法读取图片文件');
-        }
-        final uploaded = await state.files.uploadNormalFromPath(
-          filePath: f.path,
-          userId: session.userId,
-        );
-        await _sendForUploadedNormal(uploaded, session.userId);
-        return;
-      }
-
-      if (Platform.isAndroid) {
-        final pick = await _pickAndroidImage();
-        if (pick == null || !mounted) return;
-
-        final String filePath;
-        if (pick.asset != null) {
-          final f = await pick.asset!.file;
-          if (f == null) {
-            throw Exception('无法读取图片文件');
-          }
-          filePath = f.path;
-        } else if (pick.xFile != null) {
-          filePath = pick.xFile!.path;
-        } else {
-          return;
-        }
-
-        final isMotion =
-            await LivePhotoDetector.detectMotionPhotoFromPath(filePath);
-        if (!mounted) return;
-        if (isMotion) {
-          final uploaded = await state.files.uploadMotionPhotoFromPath(
-            filePath: filePath,
-            userId: session.userId,
-          );
-          final mid = await _sendForDynamic(uploaded, session.userId);
-          _localCoverPathByMessageId[mid] = filePath;
-          return;
-        }
-
-        final uploaded = await state.files.uploadNormalFromPath(
-          filePath: filePath,
-          userId: session.userId,
-        );
-        await _sendForUploadedNormal(uploaded, session.userId);
-        return;
-      }
-
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 85,
+    final isMotion = await LivePhotoDetector.detectMotionPhoto(asset);
+    if (isMotion) {
+      await _sendDynamicPhoto(
+        coverPath: file.path,
+        previewBytes: previewBytes,
+        upload: (userId) =>
+            context.read<AppState>().files.uploadMotionPhotoFromPath(
+                  filePath: file.path,
+                  userId: userId,
+                ),
       );
-      if (image == null || !mounted) return;
-      final uploaded = await state.files
-          .uploadNormalFromXFile(file: image, userId: session.userId);
-      await _sendForUploadedNormal(uploaded, session.userId);
-    } catch (e) {
-      rethrow;
+      return;
     }
+
+    await _sendImageFromPath(
+      filePath: file.path,
+      previewBytes: previewBytes,
+    );
   }
 
-  Future<AssetEntity?> _pickIosImageAsset() async {
-    final paths = await PhotoManager.getAssetPathList(type: RequestType.image);
-    if (paths.isEmpty || !mounted) return null;
-    final path = paths.first;
-    final assets = await path.getAssetListRange(start: 0, end: 200);
+  Future<void> _pickGalleryVideo() async {
+    final asset = await _pickAsset(AssetType.video);
+    if (asset == null) return;
+    final file = await asset.file;
+    if (file == null) {
+      _showSnack('Unable to read the selected file.');
+      return;
+    }
+    final previewBytes = await asset.thumbnailDataWithSize(
+      const ThumbnailSize(512, 512),
+    );
+    await _sendVideoFromPath(
+      filePath: file.path,
+      previewBytes: previewBytes,
+    );
+  }
+
+  Future<AssetEntity?> _pickAsset(AssetType type) async {
+    final permission = await PhotoManager.requestPermissionExtend();
+    if (!permission.isAuth) {
+      _showSnack('Please allow media library access first.');
+      return null;
+    }
+
+    final paths = await PhotoManager.getAssetPathList(
+      type: type == AssetType.video ? RequestType.video : RequestType.image,
+      onlyAll: true,
+      filterOption: FilterOptionGroup(
+        imageOption: const FilterOption(sizeConstraint: SizeConstraint()),
+        videoOption: const FilterOption(sizeConstraint: SizeConstraint()),
+      ),
+    );
+    if (paths.isEmpty) {
+      _showSnack('No media found.');
+      return null;
+    }
+
+    final assets = await paths.first.getAssetListPaged(page: 0, size: 120);
     if (!mounted) return null;
+
     return showModalBottomSheet<AssetEntity>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (ctx) {
-        final height = MediaQuery.of(ctx).size.height * 0.85;
+      builder: (sheetContext) {
+        final height = MediaQuery.of(sheetContext).size.height * 0.8;
         return SafeArea(
           child: SizedBox(
             height: height,
@@ -410,10 +750,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 mainAxisSpacing: 6,
               ),
               itemCount: assets.length,
-              itemBuilder: (_, i) {
-                final asset = assets[i];
+              itemBuilder: (_, index) {
+                final asset = assets[index];
                 return GestureDetector(
-                  onTap: () => Navigator.of(ctx).pop(asset),
+                  onTap: () => Navigator.of(sheetContext).pop(asset),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(8),
                     child: Stack(
@@ -423,22 +763,23 @@ class _ChatScreenState extends State<ChatScreen> {
                           future: asset.thumbnailDataWithSize(
                             const ThumbnailSize(300, 300),
                           ),
-                          builder: (_, snap) {
-                            final data = snap.data;
+                          builder: (_, snapshot) {
+                            final data = snapshot.data;
                             if (data == null) {
                               return const ColoredBox(color: Colors.black12);
                             }
                             return Image.memory(data, fit: BoxFit.cover);
                           },
                         ),
-                        if (asset.isLivePhoto)
-                          const Positioned(
-                            right: 6,
-                            top: 6,
-                            child: Icon(
-                              Icons.motion_photos_on,
-                              color: Colors.white,
-                              size: 18,
+                        if (asset.type == AssetType.video)
+                          const Align(
+                            alignment: Alignment.bottomRight,
+                            child: Padding(
+                              padding: EdgeInsets.all(6),
+                              child: Icon(
+                                Icons.play_circle_fill,
+                                color: Colors.white,
+                              ),
                             ),
                           ),
                       ],
@@ -453,453 +794,12 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Future<_AndroidPick?> _pickAndroidImage() async {
-    final picked = await showModalBottomSheet<_AndroidPick>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (ctx) {
-        final height = MediaQuery.of(ctx).size.height * 0.85;
-        return SafeArea(
-          child: SizedBox(
-            height: height,
-            child: FutureBuilder<List<AssetEntity>>(
-              future: _loadAndroidRecentImages(),
-              builder: (_, snap) {
-                final assets = snap.data;
-                if (assets == null) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                if (assets.isEmpty) {
-                  return Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text('未找到照片'),
-                          const SizedBox(height: 8),
-                          const Text(
-                            '如果系统权限是“仅允许部分照片”，这里可能为空；请到系统设置改为允许全部照片，或使用系统选择器。',
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 12),
-                          FilledButton(
-                            onPressed: () => PhotoManager.openSetting(),
-                            child: const Text('打开系统设置'),
-                          ),
-                          const SizedBox(height: 10),
-                          OutlinedButton(
-                            onPressed: () => Navigator.of(ctx)
-                                .pop(const _AndroidPick(systemPicker: true)),
-                            child: const Text('使用系统选择器'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }
-                return GridView.builder(
-                  padding: const EdgeInsets.all(8),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 4,
-                    crossAxisSpacing: 6,
-                    mainAxisSpacing: 6,
-                  ),
-                  itemCount: assets.length,
-                  itemBuilder: (_, i) {
-                    final asset = assets[i];
-                    return GestureDetector(
-                      onTap: () =>
-                          Navigator.of(ctx).pop(_AndroidPick(asset: asset)),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: FutureBuilder<Uint8List?>(
-                          future: asset.thumbnailDataWithSize(
-                            const ThumbnailSize(300, 300),
-                          ),
-                          builder: (_, snap) {
-                            final data = snap.data;
-                            if (data == null) {
-                              return const ColoredBox(color: Colors.black12);
-                            }
-                            return Image.memory(data, fit: BoxFit.cover);
-                          },
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-        );
-      },
-    );
-    if (picked == null || !mounted) return null;
-    if (!picked.systemPicker) return picked;
-
-    final XFile? x = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: null,
-    );
-    if (x == null || !mounted) return null;
-    return _AndroidPick(xFile: x);
-  }
-
-  Future<List<AssetEntity>> _loadAndroidRecentImages() async {
-    final paths = await PhotoManager.getAssetPathList(type: RequestType.image);
-    for (final p in paths) {
-      final assets = await p.getAssetListRange(start: 0, end: 200);
-      if (assets.isNotEmpty) return assets;
-    }
-    return <AssetEntity>[];
-  }
-
-  Future<void> _pickVideo() async {
-    final PermissionState ps = await PhotoManager.requestPermissionExtend();
-    if (!ps.isAuth) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('需要相册权限')),
-      );
-      return;
-    }
-
-    // 优先使用系统视频选择器（筛选稳定），失败再回落到 PhotoManager 网格。
-    AssetEntity? asset;
-    XFile? picked;
-    try {
-      picked = await _picker.pickVideo(source: ImageSource.gallery);
-    } catch (_) {}
-    if (picked == null) {
-      asset = await _pickVideoAsset();
-    }
-    if ((picked == null && asset == null) || !mounted) return;
-
-    final state = context.read<AppState>();
-    final session = state.session!;
-
-    try {
-      final String filePath;
-      Uint8List? thumb;
-      if (picked != null) {
-        filePath = picked.path;
-      } else {
-        final f = await asset!.file;
-        if (f == null) throw Exception('无法读取视频文件');
-        filePath = f.path;
-        thumb = await asset.thumbnailDataWithSize(const ThumbnailSize(420, 420));
-      }
-      final uploaded = await state.files.uploadNormalFromXFile(
-        file: XFile(filePath),
-        userId: session.userId,
-      );
-      await _sendForUploadedNormal(
-        uploaded,
-        session.userId,
-        localCoverBytes: thumb,
-      );
-    } catch (e) {
-      rethrow;
-    }
-  }
-
-  Future<void> _sendForUploadedNormal(FileUploadResponse uploaded, int myId,
-      {Uint8List? localCoverBytes, String? localCoverPath}) async {
-    final state = context.read<AppState>();
-    final fileType = (uploaded.fileType ?? '').toUpperCase();
-    if (uploaded.fileId == null) {
-      throw Exception('Upload response missing fileId');
-    }
-    if (fileType == 'IMAGE') {
-      final mid = await state.messages.sendImage(
-          senderId: myId,
-          receiverId: widget.peerId,
-          resourceId: uploaded.fileId!);
-      final msg = ChatMessage(
-        id: mid,
-        senderId: myId,
-        receiverId: widget.peerId,
-        type: 'IMAGE',
-        content: null,
-        resourceId: uploaded.fileId,
-        videoResourceId: null,
-        coverUrl: uploaded.url,
-        videoUrl: null,
-        status: 'SENT',
-        createdAt: DateTime.now(),
-      );
-      setState(() => _messages.add(msg));
-      if (localCoverBytes != null) {
-        _localCoverBytesByMessageId[mid] = localCoverBytes;
-      }
-      if (localCoverPath != null && localCoverPath.trim().isNotEmpty) {
-        _localCoverPathByMessageId[mid] = localCoverPath;
-      }
-      _scrollToBottom();
-      return;
-    }
-
-    final mid = await state.messages.sendVideo(
-        senderId: myId,
-        receiverId: widget.peerId,
-        coverResourceId: uploaded.coverId,
-        videoResourceId: uploaded.fileId!);
-    final msg = ChatMessage(
-      id: mid,
-      senderId: myId,
-      receiverId: widget.peerId,
-      type: 'VIDEO',
-      content: null,
-      resourceId: uploaded.coverId,
-      videoResourceId: uploaded.fileId,
-      coverUrl: uploaded.coverUrl,
-      videoUrl: uploaded.url,
-      status: 'SENT',
-      createdAt: DateTime.now(),
-    );
-    setState(() => _messages.add(msg));
-    if (localCoverBytes != null) {
-      _localCoverBytesByMessageId[mid] = localCoverBytes;
-    }
-    if (localCoverPath != null && localCoverPath.trim().isNotEmpty) {
-      _localCoverPathByMessageId[mid] = localCoverPath;
-    }
-    _maybeRefreshVideoCover(msg);
-    _scrollToBottom();
-  }
-
-  Future<int> _sendForDynamic(FileUploadResponse uploaded, int myId) async {
-    final coverId = uploaded.coverId;
-    final videoId = uploaded.videoId;
-    if (coverId == null || videoId == null) {
-      throw Exception('Upload response missing coverId/videoId');
-    }
-    final state = context.read<AppState>();
-    final mid = await state.messages.sendDynamicPhoto(
-        senderId: myId,
-        receiverId: widget.peerId,
-        coverId: coverId,
-        videoId: videoId);
-    final msg = ChatMessage(
-      id: mid,
-      senderId: myId,
-      receiverId: widget.peerId,
-      type: 'DYNAMIC_PHOTO',
-      content: null,
-      resourceId: coverId,
-      videoResourceId: videoId,
-      coverUrl: uploaded.coverUrl,
-      videoUrl: uploaded.videoUrl,
-      status: 'SENT',
-      createdAt: DateTime.now(),
-    );
-    setState(() => _messages.add(msg));
-    _scrollToBottom();
-    return mid;
-  }
-
-  Future<AssetEntity?> _pickVideoAsset() async {
-    final paths = await PhotoManager.getAssetPathList(type: RequestType.video);
-    if (paths.isEmpty || !mounted) return null;
-    final path = paths.first;
-    final assets = await path.getAssetListRange(start: 0, end: 200);
-    if (!mounted) return null;
-    return showModalBottomSheet<AssetEntity>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (ctx) {
-        final height = MediaQuery.of(ctx).size.height * 0.85;
-        return SafeArea(
-          child: SizedBox(
-            height: height,
-            child: GridView.builder(
-              padding: const EdgeInsets.all(8),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 4,
-                crossAxisSpacing: 6,
-                mainAxisSpacing: 6,
-              ),
-              itemCount: assets.length,
-              itemBuilder: (_, i) {
-                final asset = assets[i];
-                return GestureDetector(
-                  onTap: () => Navigator.of(ctx).pop(asset),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: FutureBuilder<Uint8List?>(
-                      future: asset.thumbnailDataWithSize(
-                        const ThumbnailSize(300, 300),
-                      ),
-                      builder: (_, snap) {
-                        final data = snap.data;
-                        if (data == null) {
-                          return const ColoredBox(color: Colors.black12);
-                        }
-                        return Image.memory(data, fit: BoxFit.cover);
-                      },
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  void _maybeRefreshVideoCover(ChatMessage m) {
-    if (m.id <= 0) return;
-    if ((m.type).toUpperCase() != 'VIDEO') return;
-    final cover = m.coverUrl?.trim();
-    if (cover != null && cover.isNotEmpty) return;
-    final coverId = m.resourceId;
-    if (coverId == null) return;
-    if (_coverRefreshing.contains(m.id)) return;
-    // 防止多个封面同时轮询导致网络/主线程抖动
-    if (_coverRefreshing.length >= _maxConcurrentCoverRefresh) return;
-    _coverRefreshing.add(m.id);
-    _refreshVideoCover(messageId: m.id, coverId: coverId).whenComplete(() {
-      _coverRefreshing.remove(m.id);
-    });
-  }
-
-  Future<void> _refreshVideoCover(
-      {required int messageId, required int coverId}) async {
-    final state = context.read<AppState>();
-    if (!mounted) return;
-    setState(() => _videoCoverWaitProgress[messageId] = 0);
-    // coverUrl 生成往往是异步的，适当延长轮询窗口，避免“封面刚好在窗口末尾才就绪”。
-    for (var i = 0; i < 30; i++) {
-      // 前几轮 400ms 快速探测，避免首帧已就绪仍等满 2s；之后 1s 降低请求频率
-      await Future<void>.delayed(
-        Duration(milliseconds: i < 10 ? 400 : 800),
-      );
-      if (!mounted) return;
-      final p = i / 29.0; // 0..1
-      setState(() {
-        _videoCoverWaitProgress[messageId] = p;
-      });
-      try {
-        final info = await state.files.preview(fileId: coverId);
-        final st = (info.sourceType ?? '').toUpperCase();
-        final url = info.url?.trim();
-        // 只要 url 已经非空，就认为可用：避免 sourceType 命名/时序不一致导致封面无法写回。
-        if (url != null && url.isNotEmpty && st != 'VIDEOCOVERPENDING') {
-          final idx = _messages.indexWhere((e) => e.id == messageId);
-          if (idx < 0) return;
-          final bust = DateTime.now().millisecondsSinceEpoch;
-          final sep = url.contains('?') ? '&' : '?';
-          final resolved = '$url${sep}t=$bust';
-          final old = _messages[idx];
-          setState(() {
-            _messages[idx] = ChatMessage(
-              id: old.id,
-              senderId: old.senderId,
-              receiverId: old.receiverId,
-              type: old.type,
-              content: old.content,
-              resourceId: old.resourceId,
-              videoResourceId: old.videoResourceId,
-              coverUrl: resolved,
-              videoUrl: old.videoUrl,
-              status: old.status,
-              createdAt: old.createdAt,
-            );
-            _videoCoverWaitProgress.remove(messageId);
-          });
-          return;
-        }
-        // 如果 url 已经非空但 sourceType 仍是 pending，也允许写回一次，避免“封面刚好 ready 但状态没切换”的窗口问题。
-        if (url != null && url.isNotEmpty && st == 'VIDEOCOVERPENDING') {
-          final idx = _messages.indexWhere((e) => e.id == messageId);
-          if (idx < 0) return;
-          final bust = DateTime.now().millisecondsSinceEpoch;
-          final sep = url.contains('?') ? '&' : '?';
-          final resolved = '$url${sep}t=$bust';
-          final old = _messages[idx];
-          setState(() {
-            _messages[idx] = ChatMessage(
-              id: old.id,
-              senderId: old.senderId,
-              receiverId: old.receiverId,
-              type: old.type,
-              content: old.content,
-              resourceId: old.resourceId,
-              videoResourceId: old.videoResourceId,
-              coverUrl: resolved,
-              videoUrl: old.videoUrl,
-              status: old.status,
-              createdAt: old.createdAt,
-            );
-            _videoCoverWaitProgress.remove(messageId);
-          });
-          return;
-        }
-      } catch (_) {}
-    }
-    if (mounted) {
-      setState(() => _videoCoverWaitProgress.remove(messageId));
-    }
-  }
-
-  void _maybeInferVideoAspectRatio(ChatMessage m) {
-    if ((m.type).toUpperCase() != 'VIDEO') return;
-    // 只有在封面缺失占位时才需要推导宽高比，避免重复初始化视频。
-    final cover = m.coverUrl;
-    if (cover != null && cover.isNotEmpty) return;
-    if (m.videoUrl == null || m.videoUrl!.isEmpty) return;
-    if (_videoAspectRatios.containsKey(m.id)) return;
-    if (_aspectRatioRefreshing.contains(m.id)) return;
-    if (_aspectRatioRefreshing.length >= _maxConcurrentAspectRefresh) return;
-
-    _aspectRatioRefreshing.add(m.id);
-    _inferVideoAspectRatio(messageId: m.id, videoUrl: m.videoUrl!).whenComplete(
-      () {
-        _aspectRatioRefreshing.remove(m.id);
-      },
-    );
-  }
-
-  Future<void> _inferVideoAspectRatio({
-    required int messageId,
-    required String videoUrl,
-  }) async {
-    try {
-      final state = context.read<AppState>();
-      final resolved = _resolveUrl(videoUrl, state.apiBaseUrl);
-      final controller = VideoPlayerController.networkUrl(Uri.parse(resolved));
-      try {
-        await controller.initialize();
-        final ar = controller.value.aspectRatio;
-        if (!mounted) return;
-        if (ar > 0 && ar.isFinite) {
-          setState(() => _videoAspectRatios[messageId] = ar);
-        }
-      } finally {
-        await controller.dispose();
-      }
-    } catch (_) {
-      // ignore: aspect ratio inference is best-effort.
-    }
-  }
-
-  String _resolveUrl(String url, String apiBaseUrl) {
-    final parsed = Uri.tryParse(url);
-    if (parsed != null && parsed.hasScheme) {
-      return url;
-    }
-    final base = Uri.parse(apiBaseUrl);
-    final path = url.startsWith('/') ? url : '/$url';
-    return base.replace(path: path, query: null, fragment: null).toString();
-  }
-
   void _openPlayer(String url) {
-    Navigator.of(context)
-        .push(MaterialPageRoute(builder: (_) => VideoPlayerScreen(url: url)));
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => VideoPlayerScreen(url: url),
+      ),
+    );
   }
 
   void _openDynamicPhoto(String coverUrl, String videoUrl) {
@@ -914,7 +814,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void _openImagePreview(String url) {
     showDialog<void>(
       context: context,
-      builder: (ctx) => Dialog.fullscreen(
+      builder: (dialogContext) => Dialog.fullscreen(
         child: Stack(
           children: [
             Container(
@@ -927,8 +827,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   url,
                   fit: BoxFit.contain,
                   errorBuilder: (_, __, ___) => const Center(
-                      child: Text('图片加载失败',
-                          style: TextStyle(color: Colors.white))),
+                    child: Text(
+                      'Image failed to load.',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -936,7 +839,7 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Align(
                 alignment: Alignment.topRight,
                 child: IconButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
+                  onPressed: () => Navigator.of(dialogContext).pop(),
                   icon: const Icon(Icons.close, color: Colors.white),
                 ),
               ),
@@ -947,118 +850,158 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<void> _showAttachMenu() async {
+    final action = await showModalBottomSheet<_AttachAction>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('Gallery Photo'),
+                onTap: () => Navigator.of(sheetContext).pop(_AttachAction.galleryImage),
+              ),
+              ListTile(
+                leading: const Icon(Icons.videocam_outlined),
+                title: const Text('Gallery Video'),
+                onTap: () => Navigator.of(sheetContext).pop(_AttachAction.galleryVideo),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('Camera Photo'),
+                onTap: () => Navigator.of(sheetContext).pop(_AttachAction.cameraImage),
+              ),
+              ListTile(
+                leading: const Icon(Icons.video_call_outlined),
+                title: const Text('Camera Video'),
+                onTap: () => Navigator.of(sheetContext).pop(_AttachAction.cameraVideo),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+
+    switch (action) {
+      case _AttachAction.galleryImage:
+        await _pickGalleryImage();
+        break;
+      case _AttachAction.galleryVideo:
+        await _pickGalleryVideo();
+        break;
+      case _AttachAction.cameraImage:
+        await _pickCameraImage();
+        break;
+      case _AttachAction.cameraVideo:
+        await _pickCameraVideo();
+        break;
+      case null:
+        break;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final myId = state.session!.userId;
-    final myName = state.session!.username;
+    final session = state.session;
+    final myId = session?.userId ?? 0;
+    final myName = session?.username ?? 'Me';
     final peerName = state.displayNameFor(widget.peerId);
-    final myAvatar = state.avatarUrlFor(myId);
-    final peerAvatar = state.avatarUrlFor(widget.peerId);
+    final myAvatarUrl = session == null ? null : state.avatarUrlFor(myId);
+    final peerAvatarUrl = state.avatarUrlFor(widget.peerId);
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
-        backgroundColor: const Color(0xFFEDEDED),
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        centerTitle: true,
-        title: Text(peerName),
-        actions: [
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert),
-            onSelected: (v) async {
-              final messenger = ScaffoldMessenger.of(context);
-              if (v == 'clear_cache') {
-                // 清理磁盘缓存 + Flutter 图片内存缓存，避免下滑回滚时二次加载。
-                await DefaultCacheManager().emptyCache();
-                await MediaDownloader.clearCache();
-                PaintingBinding.instance.imageCache.clear();
-                PaintingBinding.instance.imageCache.clearLiveImages();
-                if (!mounted) return;
-                messenger.showSnackBar(
-                  const SnackBar(content: Text('缓存已清除')),
-                );
-                setState(() {});
-              }
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(
-                value: 'clear_cache',
-                child: Text('清除缓存'),
-              ),
-            ],
-          ),
-        ],
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(peerName),
+            Text(
+              'ID ${widget.peerId}',
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: Colors.black54),
+            ),
+          ],
+        ),
       ),
       body: Column(
         children: [
-          if (_error != null)
-            Padding(
-                padding: const EdgeInsets.all(8),
-                child:
-                    Text(_error!, style: const TextStyle(color: Colors.red))),
+          if (_error != null && _error!.isNotEmpty)
+            MaterialBanner(
+              content: Text(_error!),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    setState(() => _error = null);
+                    _init();
+                  },
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : ListView.builder(
                     controller: _scrollCtrl,
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 20),
                     itemCount: _messages.length,
-                    itemBuilder: (ctx, idx) {
-                      final m = _messages[idx];
-                      final isMine = m.senderId == myId;
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: MessageBubble(
-                          key: ValueKey(m.id),
-                          message: m,
-                          isMine: isMine,
-                          myName: myName,
-                          peerName: peerName,
-                          myAvatarUrl: myAvatar,
-                          peerAvatarUrl: peerAvatar,
-                          onPlayVideo: _openPlayer,
-                          onPreviewImage: _openImagePreview,
-                          onOpenDynamicPhoto: _openDynamicPhoto,
-                          localCoverBytes: isMine
-                              ? _localCoverBytesByMessageId[m.id]
-                              : null,
-                          localCoverPath:
-                              isMine ? _localCoverPathByMessageId[m.id] : null,
-                          videoCoverWaitProgress:
-                              _videoCoverWaitProgress[m.id],
-                          videoAspectRatio: _videoAspectRatios[m.id],
-                        ),
+                    itemBuilder: (context, index) {
+                      final message = _messages[index];
+                      final isMine = message.senderId == myId;
+                      return MessageBubble(
+                        message: message,
+                        isMine: isMine,
+                        myName: myName,
+                        peerName: peerName,
+                        myAvatarUrl: myAvatarUrl,
+                        peerAvatarUrl: peerAvatarUrl,
+                        onPlayVideo: _openPlayer,
+                        onPreviewImage: _openImagePreview,
+                        onOpenDynamicPhoto: _openDynamicPhoto,
+                        localCoverBytes:
+                            _localCoverBytesByMessageId[message.id],
+                        localCoverPath:
+                            _localCoverPathByMessageId[message.id],
                       );
                     },
                   ),
           ),
           SafeArea(
             top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border(
+                  top: BorderSide(color: Colors.grey.shade200),
+                ),
+              ),
               child: Row(
                 children: [
                   IconButton(
-                    onPressed: _pickFromGallery,
+                    onPressed: _sending ? null : _showAttachMenu,
                     icon: const Icon(Icons.add_circle_outline),
                   ),
                   Expanded(
                     child: TextField(
                       controller: _textCtrl,
+                      minLines: 1,
+                      maxLines: 5,
                       textInputAction: TextInputAction.send,
                       onSubmitted: (_) => _sendText(),
                       decoration: const InputDecoration(
-                        hintText: '输入消息',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.all(Radius.circular(16)),
-                        ),
+                        hintText: 'Type a message',
+                        border: OutlineInputBorder(),
                         isDense: true,
-                        filled: true,
-                        fillColor: Colors.white,
                       ),
-                      minLines: 1,
-                      maxLines: 4,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -1068,8 +1011,9 @@ class _ChatScreenState extends State<ChatScreen> {
                         ? const SizedBox(
                             width: 18,
                             height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Text('发送'),
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Send'),
                   ),
                 ],
               ),
@@ -1081,9 +1025,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 
-class _AndroidPick {
-  const _AndroidPick({this.asset, this.xFile, this.systemPicker = false});
-  final AssetEntity? asset;
-  final XFile? xFile;
-  final bool systemPicker;
+enum _AttachAction {
+  galleryImage,
+  galleryVideo,
+  cameraImage,
+  cameraVideo,
 }

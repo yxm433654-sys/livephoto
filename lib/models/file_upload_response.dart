@@ -11,6 +11,8 @@ class FileUploadResponse {
     required this.originalName,
     required this.mimeType,
     required this.size,
+    required this.width,
+    required this.height,
     required this.duration,
     required this.verified,
     required this.videoOffset,
@@ -27,6 +29,8 @@ class FileUploadResponse {
   final String? originalName;
   final String? mimeType;
   final int? size;
+  final int? width;
+  final int? height;
   final double? duration;
   final bool? verified;
   final int? videoOffset;
@@ -48,6 +52,8 @@ class FileUploadResponse {
       originalName: json['originalName']?.toString(),
       mimeType: json['mimeType']?.toString(),
       size: toInt(json['size']),
+      width: toInt(json['width']),
+      height: toInt(json['height']),
       duration: toDouble(json['duration']),
       verified: json['verified'] is bool ? json['verified'] as bool : null,
       videoOffset: toInt(json['videoOffset']),

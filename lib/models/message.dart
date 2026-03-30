@@ -1,3 +1,5 @@
+import 'package:dynamic_photo_chat_flutter/models/chat_media.dart';
+
 class ChatMessage {
   ChatMessage({
     required this.id,
@@ -9,6 +11,7 @@ class ChatMessage {
     required this.videoResourceId,
     required this.coverUrl,
     required this.videoUrl,
+    required this.media,
     required this.status,
     required this.createdAt,
   });
@@ -22,6 +25,7 @@ class ChatMessage {
   final int? videoResourceId;
   final String? coverUrl;
   final String? videoUrl;
+  final ChatMedia? media;
   final String? status;
   final DateTime? createdAt;
 
@@ -41,6 +45,7 @@ class ChatMessage {
           : null,
       coverUrl: json['coverUrl']?.toString(),
       videoUrl: json['videoUrl']?.toString(),
+      media: ChatMedia.fromJson(json['media']),
       status: json['status']?.toString(),
       createdAt: json['createdAt'] is String
           ? DateTime.tryParse(json['createdAt'])
@@ -58,6 +63,7 @@ class ChatMessage {
         'videoResourceId': videoResourceId,
         'coverUrl': coverUrl,
         'videoUrl': videoUrl,
+        'media': media?.toJson(),
         'status': status,
         'createdAt': createdAt?.toIso8601String(),
       };
