@@ -169,14 +169,10 @@ class MessageBubble extends StatelessWidget {
                   url: resolvedCover,
                   cacheWidth: cacheW,
                 ),
-                const Positioned(
-                  right: 6,
-                  top: 6,
-                  child: Icon(
-                    Icons.motion_photos_on,
-                    color: Colors.white,
-                    size: 18,
-                  ),
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: _LiveBadge(),
                 ),
               ],
             ),
@@ -422,6 +418,39 @@ class _Avatar extends StatelessWidget {
         _initial(),
         style:
             const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+}
+
+class _LiveBadge extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.35),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircleAvatar(
+            radius: 4,
+            backgroundColor: Color(0xFFFF4D4F),
+          ),
+          SizedBox(width: 4),
+          Text(
+            'LIVE',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: Colors.white,
+              height: 1.0,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
       ),
     );
   }

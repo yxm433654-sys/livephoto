@@ -24,6 +24,7 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
   bool _holding = false;
   bool _initing = false;
   String? _error;
+  double _aspectRatio = 3 / 4;
 
   @override
   void dispose() {
@@ -37,6 +38,10 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
     _controller = c;
     c.addListener(_onTick);
     await c.initialize();
+    final ar = c.value.aspectRatio;
+    if (ar > 0 && ar.isFinite && mounted) {
+      setState(() => _aspectRatio = ar);
+    }
     await c.setLooping(false);
     await c.setVolume(0);
   }
@@ -62,6 +67,8 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
       await HapticFeedback.selectionClick();
       await _ensureController();
       if (!mounted) return;
+      // 初始化过程中如果用户松手，则不继续 seek/play。
+      if (!_holding) return;
       final c = _controller;
       if (c == null) return;
       await c.seekTo(Duration.zero);
@@ -78,15 +85,15 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
   Future<void> _stopPlayback() async {
     _holding = false;
     final c = _controller;
+    // 先淡出视频层，减少“按住/松手”时的突兀感。
+    if (mounted) setState(() => _showVideo = false);
     if (c == null) {
-      if (_showVideo && mounted) setState(() => _showVideo = false);
       return;
     }
     try {
       await c.pause();
       await c.seekTo(Duration.zero);
     } catch (_) {}
-    if (mounted) setState(() => _showVideo = false);
   }
 
   Future<void> _endPlayback() async {
@@ -121,37 +128,41 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
                       maxHeight: MediaQuery.of(context).size.height - 140,
                     ),
                     child: AspectRatio(
-                      aspectRatio: hasVideo
-                          ? (c.value.aspectRatio == 0
-                              ? 16 / 9
-                              : c.value.aspectRatio)
-                          : 3 / 4,
+                      aspectRatio: _aspectRatio,
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
                           Image.network(
                             widget.coverUrl,
-                            fit: BoxFit.contain,
+                            fit: BoxFit.cover,
                             errorBuilder: (_, __, ___) =>
                                 const ColoredBox(color: Colors.black12),
                           ),
-                          if (hasVideo)
-                            FittedBox(
-                              fit: BoxFit.contain,
-                              child: SizedBox(
-                                width: c.value.size.width,
-                                height: c.value.size.height,
-                                child: VideoPlayer(c),
+                          if (c != null && c.value.isInitialized)
+                            Positioned.fill(
+                              child: AnimatedOpacity(
+                                duration:
+                                    const Duration(milliseconds: 180),
+                                opacity: hasVideo ? 1.0 : 0.0,
+                                child: AnimatedScale(
+                                  duration:
+                                      const Duration(milliseconds: 180),
+                                  scale: hasVideo ? 1.02 : 1.0,
+                                  child: FittedBox(
+                                    fit: BoxFit.cover,
+                                    child: SizedBox(
+                                      width: c.value.size.width,
+                                      height: c.value.size.height,
+                                      child: VideoPlayer(c),
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
                           const Positioned(
                             right: 10,
                             top: 10,
-                            child: Icon(
-                              Icons.motion_photos_on,
-                              color: Colors.white,
-                              size: 22,
-                            ),
+                            child: _LiveBadge(),
                           ),
                         ],
                       ),
@@ -159,6 +170,47 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
                   ),
                 ),
               ),
+      ),
+    );
+  }
+}
+
+class _LiveBadge extends StatelessWidget {
+  const _LiveBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.35),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: const Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 8,
+            height: 8,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Color(0xFFFF4D4F),
+              ),
+            ),
+          ),
+          SizedBox(width: 6),
+          Text(
+            'LIVE',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+              height: 1.0,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
       ),
     );
   }
