@@ -100,7 +100,7 @@ class MessageBubble extends StatelessWidget {
 
     if (t == 'IMAGE') {
       final url = message.coverUrl;
-      if (url == null || url.isEmpty) return const Text('图片不可用');
+      if (url == null || url.trim().isEmpty) return const Text('图片不可用');
       final resolved = _resolveUrl(context, url);
       return GestureDetector(
         onTap: () => onPreviewImage(resolved),
@@ -133,7 +133,7 @@ class MessageBubble extends StatelessWidget {
         videoUrl:
             video == null || video.isEmpty ? null : _resolveUrl(context, video),
         coverUrl:
-            cover == null || cover.isEmpty ? null : _resolveUrl(context, cover),
+            cover == null || cover.trim().isEmpty ? null : _resolveUrl(context, cover),
         coverWaitProgress: videoCoverWaitProgress,
         videoAspectRatio: videoAspectRatio,
       );
@@ -142,10 +142,14 @@ class MessageBubble extends StatelessWidget {
     if (t == 'DYNAMIC_PHOTO') {
       final cover = message.coverUrl;
       final video = message.videoUrl;
-      if (cover == null || cover.isEmpty) return const Text('动态图片不可用');
+      if (cover == null || cover.trim().isEmpty) {
+        return const Text('动态图片不可用');
+      }
       final resolvedCover = _resolveUrl(context, cover);
       final resolvedVideo =
-          (video == null || video.isEmpty) ? null : _resolveUrl(context, video);
+          (video == null || video.trim().isEmpty)
+              ? null
+              : _resolveUrl(context, video);
       return GestureDetector(
         onTap: resolvedVideo == null
             ? null

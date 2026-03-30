@@ -89,7 +89,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final pendingVideos = _messages
           .where((m) =>
               m.type.toUpperCase() == 'VIDEO' &&
-              (m.coverUrl == null || m.coverUrl!.isEmpty))
+              (m.coverUrl == null || m.coverUrl!.trim().isEmpty))
           .take(3)
           .toList();
       for (final m in pendingVideos) {
@@ -664,7 +664,8 @@ class _ChatScreenState extends State<ChatScreen> {
   void _maybeRefreshVideoCover(ChatMessage m) {
     if (m.id <= 0) return;
     if ((m.type).toUpperCase() != 'VIDEO') return;
-    if (m.coverUrl != null && m.coverUrl!.isNotEmpty) return;
+    final cover = m.coverUrl?.trim();
+    if (cover != null && cover.isNotEmpty) return;
     final coverId = m.resourceId;
     if (coverId == null) return;
     if (_coverRefreshing.contains(m.id)) return;
@@ -681,21 +682,49 @@ class _ChatScreenState extends State<ChatScreen> {
     final state = context.read<AppState>();
     if (!mounted) return;
     setState(() => _videoCoverWaitProgress[messageId] = 0);
-    for (var i = 0; i < 20; i++) {
+    // coverUrl 生成往往是异步的，适当延长轮询窗口，避免“封面刚好在窗口末尾才就绪”。
+    for (var i = 0; i < 30; i++) {
       // 前几轮 400ms 快速探测，避免首帧已就绪仍等满 2s；之后 1s 降低请求频率
       await Future<void>.delayed(
-        Duration(milliseconds: i < 8 ? 400 : 1000),
+        Duration(milliseconds: i < 10 ? 400 : 800),
       );
       if (!mounted) return;
-      final p = i / 19.0; // 0..1
+      final p = i / 29.0; // 0..1
       setState(() {
         _videoCoverWaitProgress[messageId] = p;
       });
       try {
         final info = await state.files.preview(fileId: coverId);
         final st = (info.sourceType ?? '').toUpperCase();
-        final url = info.url;
-        if (st != 'VIDEOCOVERPENDING' && url != null && url.isNotEmpty) {
+        final url = info.url?.trim();
+        // 只要 url 已经非空，就认为可用：避免 sourceType 命名/时序不一致导致封面无法写回。
+        if (url != null && url.isNotEmpty && st != 'VIDEOCOVERPENDING') {
+          final idx = _messages.indexWhere((e) => e.id == messageId);
+          if (idx < 0) return;
+          final bust = DateTime.now().millisecondsSinceEpoch;
+          final sep = url.contains('?') ? '&' : '?';
+          final resolved = '$url${sep}t=$bust';
+          final old = _messages[idx];
+          setState(() {
+            _messages[idx] = ChatMessage(
+              id: old.id,
+              senderId: old.senderId,
+              receiverId: old.receiverId,
+              type: old.type,
+              content: old.content,
+              resourceId: old.resourceId,
+              videoResourceId: old.videoResourceId,
+              coverUrl: resolved,
+              videoUrl: old.videoUrl,
+              status: old.status,
+              createdAt: old.createdAt,
+            );
+            _videoCoverWaitProgress.remove(messageId);
+          });
+          return;
+        }
+        // 如果 url 已经非空但 sourceType 仍是 pending，也允许写回一次，避免“封面刚好 ready 但状态没切换”的窗口问题。
+        if (url != null && url.isNotEmpty && st == 'VIDEOCOVERPENDING') {
           final idx = _messages.indexWhere((e) => e.id == messageId);
           if (idx < 0) return;
           final bust = DateTime.now().millisecondsSinceEpoch;
@@ -865,6 +894,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       return Padding(
                         padding: const EdgeInsets.symmetric(vertical: 4),
                         child: MessageBubble(
+                          key: ValueKey(m.id),
                           message: m,
                           isMine: isMine,
                           myName: myName,
