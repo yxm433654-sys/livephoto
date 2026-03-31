@@ -1,0 +1,145 @@
+import 'package:flutter/material.dart';
+
+class ConversationListItem extends StatelessWidget {
+  const ConversationListItem({
+    super.key,
+    required this.name,
+    required this.avatarLabel,
+    required this.avatarColor,
+    required this.unreadCount,
+    required this.onTap,
+    this.avatarUrl,
+  });
+
+  final String name;
+  final String avatarLabel;
+  final Color avatarColor;
+  final int unreadCount;
+  final VoidCallback onTap;
+  final String? avatarUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final subtitle = unreadCount > 0 ? '$unreadCount 条未读消息' : '点击进入聊天';
+
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(22),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(22),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
+            children: [
+              _ConversationAvatar(
+                avatarColor: avatarColor,
+                avatarLabel: avatarLabel,
+                avatarUrl: avatarUrl,
+                unreadCount: unreadCount,
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: unreadCount > 0
+                            ? const Color(0xFFDC2626)
+                            : const Color(0xFF6B7280),
+                        fontWeight:
+                            unreadCount > 0 ? FontWeight.w600 : FontWeight.w400,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: Color(0xFF9CA3AF),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ConversationAvatar extends StatelessWidget {
+  const _ConversationAvatar({
+    required this.avatarColor,
+    required this.avatarLabel,
+    required this.avatarUrl,
+    required this.unreadCount,
+  });
+
+  final Color avatarColor;
+  final String avatarLabel;
+  final String? avatarUrl;
+  final int unreadCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        avatarUrl == null
+            ? CircleAvatar(
+                radius: 24,
+                backgroundColor: avatarColor,
+                child: Text(
+                  avatarLabel,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              )
+            : CircleAvatar(
+                radius: 24,
+                backgroundImage: NetworkImage(avatarUrl!),
+              ),
+        if (unreadCount > 0)
+          Positioned(
+            top: -4,
+            right: -8,
+            child: Container(
+              constraints: const BoxConstraints(minWidth: 20),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEF4444),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+              child: Text(
+                unreadCount > 99 ? '99+' : unreadCount.toString(),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}

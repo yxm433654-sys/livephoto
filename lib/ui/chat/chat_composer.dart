@@ -57,6 +57,7 @@ class ChatComposer extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Container(
+                    constraints: const BoxConstraints(minHeight: 52),
                     decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(24),
@@ -152,7 +153,7 @@ class ChatComposer extends StatelessWidget {
 }
 
 class _ComposerIconButton extends StatelessWidget {
-  const _ComposerIconButton({
+const _ComposerIconButton({
     required this.icon,
     required this.onTap,
     this.active = false,
@@ -165,6 +166,8 @@ class _ComposerIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
+      width: 52,
+      height: 52,
       decoration: BoxDecoration(
         color: active ? const Color(0xFFE0F2FE) : Colors.white,
         borderRadius: BorderRadius.circular(16),

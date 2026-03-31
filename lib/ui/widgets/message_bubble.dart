@@ -164,6 +164,12 @@ class MessageBubble extends StatelessWidget {
               url: coverUrl,
               fit: BoxFit.cover,
             ),
+            if (_formatDuration(media?.duration) case final durationLabel?)
+              Positioned(
+                right: 8,
+                bottom: 8,
+                child: _DurationBadge(label: durationLabel),
+              ),
             if (processing)
               const Center(child: _InlineStatus(label: '处理中'))
             else
@@ -284,6 +290,16 @@ class MessageBubble extends StatelessWidget {
       return width / height;
     }
     return fallback;
+  }
+
+  String? _formatDuration(double? durationSeconds) {
+    if (durationSeconds == null || !durationSeconds.isFinite || durationSeconds <= 0) {
+      return null;
+    }
+    final totalSeconds = durationSeconds.round();
+    final minutes = totalSeconds ~/ 60;
+    final seconds = totalSeconds % 60;
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
   String _resolveUrl(BuildContext context, String url) {
@@ -440,6 +456,31 @@ class _PlayBadge extends StatelessWidget {
         Icons.play_arrow_rounded,
         color: Colors.white,
         size: 28,
+      ),
+    );
+  }
+}
+
+class _DurationBadge extends StatelessWidget {
+  const _DurationBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.55),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }

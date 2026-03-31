@@ -12,6 +12,7 @@ import 'package:dynamic_photo_chat_flutter/ui/chat/chat_media_navigator.dart';
 import 'package:dynamic_photo_chat_flutter/ui/chat/chat_media_picker.dart';
 import 'package:dynamic_photo_chat_flutter/ui/chat/chat_media_sender.dart';
 import 'package:dynamic_photo_chat_flutter/utils/media_downloader.dart';
+import 'package:dynamic_photo_chat_flutter/utils/user_error_message.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:intl/intl.dart';
@@ -126,9 +127,21 @@ class _ChatScreenState extends State<ChatScreen> {
       }
 
       final idx = _messages.indexWhere((e) => e.id == message.id);
+      final pendingIdx = idx < 0 ? _findPendingLocalIndex(message, myId) : -1;
       setState(() {
         if (idx >= 0) {
           _messages[idx] = message;
+        } else if (pendingIdx >= 0) {
+          final pendingId = _messages[pendingIdx].id;
+          _messages[pendingIdx] = message;
+          final localBytes = _localCoverBytesByMessageId.remove(pendingId);
+          final localPath = _localCoverPathByMessageId.remove(pendingId);
+          if (localBytes != null) {
+            _localCoverBytesByMessageId[message.id] = localBytes;
+          }
+          if (localPath != null) {
+            _localCoverPathByMessageId[message.id] = localPath;
+          }
         } else {
           _messages.add(message);
         }
@@ -145,6 +158,18 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollToBottom();
       }
     });
+  }
+
+  int _findPendingLocalIndex(ChatMessage message, int myId) {
+    if (message.senderId != myId) return -1;
+    return _messages.indexWhere(
+      (candidate) =>
+          candidate.id < 0 &&
+          candidate.senderId == myId &&
+          candidate.receiverId == widget.peerId &&
+          candidate.type == message.type &&
+          (candidate.status ?? '').toUpperCase() == 'SENDING',
+    );
   }
 
   bool _isInThisChat(ChatMessage message, int myId) {
@@ -186,11 +211,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _toUserError(Object error) {
-    final text = error.toString().trim();
-    if (text.startsWith('Exception: ')) {
-      return text.substring('Exception: '.length);
-    }
-    return text;
+    return UserErrorMessage.from(error);
   }
 
   void _showSnack(String message) {
@@ -451,7 +472,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (asset == null) return;
     final file = await asset.file;
     if (file == null) {
-      _showSnack('Unable to read the selected file.');
+      _showSnack('无法读取所选图片。');
       return;
     }
 
@@ -474,7 +495,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (asset == null) return;
     final file = await asset.file;
     if (file == null) {
-      _showSnack('Unable to read the selected file.');
+      _showSnack('无法读取所选视频。');
       return;
     }
     final previewBytes = await asset.thumbnailDataWithSize(
@@ -501,7 +522,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final picked = await _dynamicMediaDetector.detect(asset);
     if (picked == null) {
-      _showSnack('Unable to read the selected live photo.');
+      _showSnack('无法读取所选实况图片。');
       return;
     }
     final uploader = DynamicMediaUploadService(appState.files);
@@ -603,7 +624,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _localCoverBytesByMessageId.clear();
         _localCoverPathByMessageId.clear();
       });
-      _showSnack('Chat history cleared.');
+      _showSnack('聊天记录已清空');
     } catch (e) {
       _showSnack(_toUserError(e));
     }
@@ -683,6 +704,16 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
+          if (state.connectionNotice != null && state.connectionNotice!.isNotEmpty)
+            MaterialBanner(
+              content: Text(state.connectionNotice!),
+              actions: [
+                TextButton(
+                  onPressed: state.clearConnectionNotice,
+                  child: const Text('知道了'),
+                ),
+              ],
+            ),
           if (_error != null && _error!.isNotEmpty)
             MaterialBanner(
               content: Text(_error!),
@@ -744,7 +775,6 @@ const List<String> _emojiSet = <String>[
   '😂',
   '🤣',
   '😊',
-  '🥹',
   '😍',
   '😘',
   '😜',
@@ -758,12 +788,12 @@ const List<String> _emojiSet = <String>[
   '🥳',
   '👍',
   '👌',
-  '✌️',
+  '✌',
   '👏',
   '🙏',
   '🎉',
-  '❤️',
-  '💖',
+  '❤',
+  '💕',
   '💯',
   '🔥',
   '🌹',

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:dynamic_photo_chat_flutter/models/api_response.dart';
 import 'package:dynamic_photo_chat_flutter/models/file_upload_response.dart';
 import 'package:dynamic_photo_chat_flutter/services/api_config.dart';
+import 'package:dynamic_photo_chat_flutter/utils/user_error_message.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
@@ -37,12 +38,12 @@ class FileService {
   Future<T> _guard<T>(Future<T> Function() run) async {
     try {
       return await run();
-    } on SocketException catch (e) {
-      throw Exception(
-        '连接失败，请在登录页右上角设置API地址为电脑局域网IP（例如 http://192.168.x.x:8080）: ${e.message}',
-      );
+    } on SocketException {
+      throw Exception('无法连接服务器，请检查网络和接口地址设置。');
     } on TimeoutException {
-      throw Exception('请求超时，请检查网络或API地址（登录页右上角可设置）');
+      throw Exception('上传超时，请稍后重试。');
+    } catch (error) {
+      throw Exception(UserErrorMessage.from(error));
     }
   }
 
@@ -152,6 +153,7 @@ class FileService {
         req.fields.addAll(fields);
       }
       req.files.addAll(files);
+
       final streamed = await _http.send(req).timeout(_requestTimeout);
       final res = await http.Response.fromStream(streamed).timeout(
         _requestTimeout,
@@ -160,7 +162,7 @@ class FileService {
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
       if (!api.success) {
-        throw Exception(api.message ?? 'Upload failed');
+        throw Exception(api.message ?? '上传失败，请稍后重试。');
       }
       return FileUploadResponse.fromJson(api.data);
     });
@@ -175,14 +177,16 @@ class FileService {
           jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
       if (!api.success) {
-        throw Exception(api.message ?? 'Preview failed');
+        throw Exception(api.message ?? '预览信息获取失败，请稍后重试。');
       }
       return FileUploadResponse.fromJson(api.data);
     });
   }
 
   Future<http.MultipartFile> _toMultipart(
-      PlatformFile file, String field) async {
+    PlatformFile file,
+    String field,
+  ) async {
     if (file.bytes != null) {
       return http.MultipartFile.fromBytes(
         field,
@@ -191,7 +195,7 @@ class FileService {
       );
     }
     if (file.path == null) {
-      throw Exception('File path is null');
+      throw Exception('文件路径为空');
     }
     return http.MultipartFile.fromPath(field, file.path!, filename: file.name);
   }
