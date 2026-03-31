@@ -11,6 +11,7 @@ import 'package:dynamic_photo_chat_flutter/services/auth_service.dart';
 import 'package:dynamic_photo_chat_flutter/services/file_service.dart';
 import 'package:dynamic_photo_chat_flutter/services/message_service.dart';
 import 'package:dynamic_photo_chat_flutter/services/realtime_service.dart';
+import 'package:dynamic_photo_chat_flutter/services/server_config_store.dart';
 import 'package:dynamic_photo_chat_flutter/utils/user_error_message.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -24,8 +25,6 @@ class AppState extends ChangeNotifier {
 
   static const _sessionKey = 'session';
   static const _peersKey = 'peers';
-  static const _apiBaseKey = 'apiBaseUrl';
-  static const _wsBaseKey = 'wsBaseUrl';
   static const _lastMsgIdKey = 'lastMessageId';
 
   late ApiClient api;
@@ -38,6 +37,7 @@ class AppState extends ChangeNotifier {
   List<int> peers = <int>[];
   late String apiBaseUrl;
   late String wsBaseUrl;
+  final ServerConfigStore _serverConfigStore = ServerConfigStore();
 
   final Map<int, int> _unreadByPeer = <int, int>{};
   final Map<int, UserProfile> _userCache = <int, UserProfile>{};
@@ -127,16 +127,9 @@ class AppState extends ChangeNotifier {
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
-    final apiSaved = _prefs!.getString(_apiBaseKey);
-    final wsSaved = _prefs!.getString(_wsBaseKey);
-    if (apiSaved != null && apiSaved.trim().isNotEmpty) {
-      apiBaseUrl = apiSaved.trim();
-    }
-    if (wsSaved != null && wsSaved.trim().isNotEmpty) {
-      wsBaseUrl = wsSaved.trim();
-    } else {
-      wsBaseUrl = _deriveWsBaseUrl(apiBaseUrl);
-    }
+    final endpoints = await _serverConfigStore.load(_prefs!);
+    apiBaseUrl = endpoints.apiBaseUrl;
+    wsBaseUrl = endpoints.wsBaseUrl;
     _buildServices();
 
     final raw = _prefs!.getString(_sessionKey);
@@ -155,12 +148,15 @@ class AppState extends ChangeNotifier {
     required String apiBaseUrl,
     String? wsBaseUrl,
   }) async {
-    this.apiBaseUrl = apiBaseUrl.trim();
-    this.wsBaseUrl = (wsBaseUrl == null || wsBaseUrl.trim().isEmpty)
-        ? _deriveWsBaseUrl(this.apiBaseUrl)
-        : wsBaseUrl.trim();
-    await _prefs?.setString(_apiBaseKey, this.apiBaseUrl);
-    await _prefs?.setString(_wsBaseKey, this.wsBaseUrl);
+    final preferences = _prefs;
+    if (preferences == null) return;
+    final endpoints = await _serverConfigStore.save(
+      preferences,
+      apiBaseUrl: apiBaseUrl,
+      wsBaseUrl: wsBaseUrl,
+    );
+    this.apiBaseUrl = endpoints.apiBaseUrl;
+    this.wsBaseUrl = endpoints.wsBaseUrl;
     _buildServices();
     if (session != null) {
       _startRealtime();
@@ -284,17 +280,6 @@ class AppState extends ChangeNotifier {
     messages = MessageService(api);
     files = FileService(baseUrl: apiBaseUrl);
   }
-
-  static String _deriveWsBaseUrl(String httpBase) {
-    if (httpBase.startsWith('https://')) {
-      return 'wss://${httpBase.substring('https://'.length)}';
-    }
-    if (httpBase.startsWith('http://')) {
-      return 'ws://${httpBase.substring('http://'.length)}';
-    }
-    return httpBase;
-  }
-
   Future<void> _restoreSessionScopedState() async {
     peers = <int>[];
     _lastMessageId = 0;
