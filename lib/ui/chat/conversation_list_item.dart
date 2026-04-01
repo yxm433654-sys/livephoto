@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 class ConversationListItem extends StatelessWidget {
   const ConversationListItem({
@@ -22,8 +22,8 @@ class ConversationListItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final resolvedSubtitle =
-        subtitle ?? (unreadCount > 0 ? '$unreadCount 条未读消息' : '点击进入聊天');
+    final resolvedSubtitle = subtitle ??
+        (unreadCount > 0 ? '$unreadCount 条未读消息' : '点击进入聊天');
 
     return Material(
       color: Colors.white,

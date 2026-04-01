@@ -1,7 +1,5 @@
-import 'package:dynamic_photo_chat_flutter/ui/screens/dynamic_photo_screen.dart';
-import 'package:dynamic_photo_chat_flutter/ui/screens/image_preview_screen.dart';
-import 'package:dynamic_photo_chat_flutter/ui/screens/video_player_screen.dart';
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
+import 'package:vox_flutter/ui/screens/media_preview_screen.dart';
 
 class ChatMediaNavigator {
   ChatMediaNavigator(this.context);
@@ -12,7 +10,7 @@ class ChatMediaNavigator {
   void openPlayer(String url) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => VideoPlayerScreen(url: url),
+        builder: (_) => MediaPreviewScreen.video(url: url),
       ),
     );
   }
@@ -20,7 +18,7 @@ class ChatMediaNavigator {
   void openImagePreview(String url) {
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ImagePreviewScreen(url: url),
+        builder: (_) => MediaPreviewScreen.image(url: url),
       ),
     );
   }
@@ -44,7 +42,7 @@ class ChatMediaNavigator {
     try {
       await Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => DynamicPhotoScreen(
+          builder: (_) => MediaPreviewScreen.dynamicPhoto(
             coverUrl: coverUrl,
             videoUrl: videoUrl,
             initialAspectRatio: aspectRatio,

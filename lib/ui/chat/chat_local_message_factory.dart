@@ -1,39 +1,4 @@
-import 'package:dynamic_photo_chat_flutter/models/chat_media.dart';
-import 'package:dynamic_photo_chat_flutter/models/message.dart';
+﻿import 'package:vox_flutter/ui/chat/local_message_factory.dart';
 
-class ChatLocalMessageFactory {
-  const ChatLocalMessageFactory({
-    required this.senderId,
-    required this.receiverId,
-  });
-
-  final int senderId;
-  final int receiverId;
-
-  ChatMessage build({
-    required int id,
-    required String type,
-    String? content,
-    int? resourceId,
-    int? videoResourceId,
-    String? coverUrl,
-    String? videoUrl,
-    ChatMedia? media,
-    String? status,
-  }) {
-    return ChatMessage(
-      id: id,
-      senderId: senderId,
-      receiverId: receiverId,
-      type: type,
-      content: content,
-      resourceId: resourceId,
-      videoResourceId: videoResourceId,
-      coverUrl: coverUrl,
-      videoUrl: videoUrl,
-      media: media,
-      status: status,
-      createdAt: DateTime.now(),
-    );
-  }
-}
+export 'local_message_factory.dart';
+typedef ChatLocalMessageFactory = LocalMessageFactory;

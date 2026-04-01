@@ -3,8 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:dynamic_photo_chat_flutter/ui/screens/login_screen.dart';
-import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
+import 'package:vox_flutter/ui/screens/login_screen.dart';
+import 'package:vox_flutter/state/app_state.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

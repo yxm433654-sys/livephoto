@@ -1,8 +1,9 @@
-import 'dart:typed_data';
+﻿import 'dart:typed_data';
 
-import 'package:dynamic_photo_chat_flutter/models/message.dart';
-import 'package:dynamic_photo_chat_flutter/ui/widgets/message_bubble.dart';
 import 'package:flutter/material.dart';
+import 'package:vox_flutter/application/message/media_url_resolver.dart';
+import 'package:vox_flutter/models/message.dart';
+import 'package:vox_flutter/ui/widgets/message_bubble.dart';
 
 class ChatMessageList extends StatelessWidget {
   const ChatMessageList({
@@ -22,6 +23,7 @@ class ChatMessageList extends StatelessWidget {
     required this.onOpenDynamicPhoto,
     required this.localCoverBytesByMessageId,
     required this.localCoverPathByMessageId,
+    required this.urlResolver,
   });
 
   final bool loading;
@@ -40,6 +42,7 @@ class ChatMessageList extends StatelessWidget {
       onOpenDynamicPhoto;
   final Map<int, Uint8List> localCoverBytesByMessageId;
   final Map<int, String> localCoverPathByMessageId;
+  final MediaUrlResolver urlResolver;
 
   @override
   Widget build(BuildContext context) {
@@ -90,6 +93,7 @@ class ChatMessageList extends StatelessWidget {
               onPlayVideo: onPlayVideo,
               onPreviewImage: onPreviewImage,
               onOpenDynamicPhoto: onOpenDynamicPhoto,
+              urlResolver: urlResolver,
               localCoverBytes: localCoverBytesByMessageId[message.id],
               localCoverPath: localCoverPathByMessageId[message.id],
             ),

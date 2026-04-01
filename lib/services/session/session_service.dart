@@ -1,5 +1,5 @@
-import 'package:dynamic_photo_chat_flutter/models/chat_session_summary.dart';
-import 'package:dynamic_photo_chat_flutter/services/api_client.dart';
+import 'package:vox_flutter/models/chat_session_summary.dart';
+import 'package:vox_flutter/services/network/api_client.dart';
 
 class SessionService {
   SessionService(this._api);

@@ -1,10 +1,10 @@
-import 'dart:async';
+﻿import 'dart:async';
 
-import 'package:dynamic_photo_chat_flutter/utils/media_downloader.dart';
-import 'package:dynamic_photo_chat_flutter/utils/media_saver.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
+import 'package:vox_flutter/utils/media_downloader.dart';
+import 'package:vox_flutter/utils/media_saver.dart';
 
 class DynamicPhotoScreen extends StatefulWidget {
   const DynamicPhotoScreen({
@@ -149,7 +149,7 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
           child: Column(
             children: [
               _DetailTopBar(
-                title: widget.title ?? 'Live Photo',
+                title: widget.title ?? 'Dynamic Photo',
                 onBack: _handleExit,
                 onSave: () async {
                   final messenger = ScaffoldMessenger.of(context);
@@ -160,7 +160,9 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
                     );
                     messenger.showSnackBar(
                       const SnackBar(
-                        content: Text('已将静态封面保存到本地相册'),
+                        content: Text(
+                          'Saved cover image to your photo library.',
+                        ),
                       ),
                     );
                   } catch (e) {
@@ -228,8 +230,8 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
                                         const SizedBox(height: 12),
                                         Text(
                                           progress == null
-                                              ? '正在加载 Live Photo...'
-                                              : '正在加载 Live Photo... ${(progress * 100).round()}%',
+                                              ? 'Loading dynamic photo...'
+                                              : 'Loading dynamic photo... ${(progress * 100).round()}%',
                                           style: const TextStyle(
                                             color: Colors.white,
                                             fontWeight: FontWeight.w600,
@@ -371,3 +373,6 @@ class _LiveBadge extends StatelessWidget {
     );
   }
 }
+
+
+

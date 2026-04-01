@@ -1,7 +1,7 @@
-import 'package:dynamic_photo_chat_flutter/utils/media_downloader.dart';
-import 'package:dynamic_photo_chat_flutter/utils/media_saver.dart';
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import 'package:vox_flutter/utils/media_downloader.dart';
+import 'package:vox_flutter/utils/media_saver.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   const VideoPlayerScreen({super.key, required this.url, this.title});
@@ -80,13 +80,18 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         child: Column(
           children: [
             _VideoDetailTopBar(
-              title: widget.title ?? '视频',
+              title: widget.title ?? 'Video',
               onSave: () async {
                 final messenger = ScaffoldMessenger.of(context);
                 try {
-                  await MediaSaver.saveVideoFromUrl(widget.url, title: widget.title);
+                  await MediaSaver.saveVideoFromUrl(
+                    widget.url,
+                    title: widget.title,
+                  );
                   messenger.showSnackBar(
-                    const SnackBar(content: Text('已保存到本地相册')),
+                    const SnackBar(
+                      content: Text('Saved to your photo library.'),
+                    ),
                   );
                 } catch (e) {
                   messenger.showSnackBar(
@@ -116,8 +121,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                                 const SizedBox(height: 12),
                                 Text(
                                   progress == null
-                                      ? '正在加载视频...'
-                                      : '正在加载视频... ${(progress * 100).round()}%',
+                                      ? 'Loading video...'
+                                      : 'Loading video... ${(progress * 100).round()}%',
                                   style: const TextStyle(color: Colors.white70),
                                 ),
                               ],
@@ -232,3 +237,7 @@ class _VideoDetailTopBar extends StatelessWidget {
     );
   }
 }
+
+
+
+

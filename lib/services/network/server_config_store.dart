@@ -1,4 +1,4 @@
-import 'package:dynamic_photo_chat_flutter/services/api_config.dart';
+import 'package:vox_flutter/services/network/api_config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ServerEndpoints {

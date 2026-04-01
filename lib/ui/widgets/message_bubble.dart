@@ -1,14 +1,13 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:dynamic_photo_chat_flutter/models/chat_media.dart';
-import 'package:dynamic_photo_chat_flutter/models/message.dart';
-import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:vox_flutter/application/message/media_url_resolver.dart';
+import 'package:vox_flutter/models/chat_media.dart';
+import 'package:vox_flutter/models/message.dart';
 
 class MessageBubble extends StatelessWidget {
   const MessageBubble({
@@ -22,6 +21,7 @@ class MessageBubble extends StatelessWidget {
     required this.onPlayVideo,
     required this.onPreviewImage,
     required this.onOpenDynamicPhoto,
+    required this.urlResolver,
     this.localCoverBytes,
     this.localCoverPath,
   });
@@ -36,6 +36,7 @@ class MessageBubble extends StatelessWidget {
   final void Function(String url) onPreviewImage;
   final Future<void> Function(String coverUrl, String videoUrl, double aspectRatio)
       onOpenDynamicPhoto;
+  final MediaUrlResolver urlResolver;
   final Uint8List? localCoverBytes;
   final String? localCoverPath;
 
@@ -44,7 +45,7 @@ class MessageBubble extends StatelessWidget {
     final mq = MediaQuery.of(context);
     final mediaWidth = math.min(mq.size.width * 0.48, 230.0);
     final maxMediaHeight = math.min(mq.size.height * 0.30, 210.0);
-    final bubble = _content(context, mediaWidth, maxMediaHeight);
+    final bubble = _content(mediaWidth, maxMediaHeight);
     final status = (message.status ?? '').toUpperCase();
 
     final avatar = _Avatar(
@@ -87,7 +88,7 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  Widget _content(BuildContext context, double mediaWidth, double maxMediaHeight) {
+  Widget _content(double mediaWidth, double maxMediaHeight) {
     final type = message.type.toUpperCase();
     final media = message.media;
 
@@ -95,19 +96,18 @@ class MessageBubble extends StatelessWidget {
       return _TextBubble(text: message.content ?? '', isMine: isMine);
     }
     if (type == 'IMAGE') {
-      return _imageBubble(context, mediaWidth, maxMediaHeight, media);
+      return _imageBubble(mediaWidth, maxMediaHeight, media);
     }
     if (type == 'VIDEO') {
-      return _videoBubble(context, mediaWidth, maxMediaHeight, media);
+      return _videoBubble(mediaWidth, maxMediaHeight, media);
     }
     if (type == 'DYNAMIC_PHOTO') {
-      return _dynamicBubble(context, mediaWidth, maxMediaHeight, media);
+      return _dynamicBubble(mediaWidth, maxMediaHeight, media);
     }
     return _TextBubble(text: message.content ?? type, isMine: isMine);
   }
 
   Widget _imageBubble(
-    BuildContext context,
     double mediaWidth,
     double maxMediaHeight,
     ChatMedia? media,
@@ -121,21 +121,16 @@ class MessageBubble extends StatelessWidget {
     return GestureDetector(
       onTap: url == null || url.trim().isEmpty
           ? null
-          : () => onPreviewImage(_resolveUrl(context, url)),
+          : () => onPreviewImage(urlResolver.resolve(url)),
       child: _MediaCard(
         width: size.width,
         height: size.height,
-        child: _buildMediaImage(
-          context: context,
-          url: url,
-          fit: BoxFit.contain,
-        ),
+        child: _buildMediaImage(url: url, fit: BoxFit.contain),
       ),
     );
   }
 
   Widget _videoBubble(
-    BuildContext context,
     double mediaWidth,
     double maxMediaHeight,
     ChatMedia? media,
@@ -152,18 +147,14 @@ class MessageBubble extends StatelessWidget {
     return GestureDetector(
       onTap: videoUrl == null || videoUrl.trim().isEmpty
           ? null
-          : () => onPlayVideo(_resolveUrl(context, videoUrl)),
+          : () => onPlayVideo(urlResolver.resolve(videoUrl)),
       child: _MediaCard(
         width: size.width,
         height: size.height,
         child: Stack(
           fit: StackFit.expand,
           children: [
-            _buildMediaImage(
-              context: context,
-              url: coverUrl,
-              fit: BoxFit.contain,
-            ),
+            _buildMediaImage(url: coverUrl, fit: BoxFit.contain),
             if (_formatDuration(media?.duration) case final durationLabel?)
               Positioned(
                 right: 8,
@@ -181,7 +172,6 @@ class MessageBubble extends StatelessWidget {
   }
 
   Widget _dynamicBubble(
-    BuildContext context,
     double mediaWidth,
     double maxMediaHeight,
     ChatMedia? media,
@@ -203,8 +193,8 @@ class MessageBubble extends StatelessWidget {
                 onOpenDynamicPhoto(
                   coverUrl == null || coverUrl.trim().isEmpty
                       ? ''
-                      : _resolveUrl(context, coverUrl),
-                  _resolveUrl(context, videoUrl),
+                      : urlResolver.resolve(coverUrl),
+                  urlResolver.resolve(videoUrl),
                   _resolveAspectRatio(media, fallback: 3 / 4),
                 ),
               );
@@ -215,11 +205,7 @@ class MessageBubble extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            _buildMediaImage(
-              context: context,
-              url: coverUrl,
-              fit: BoxFit.contain,
-            ),
+            _buildMediaImage(url: coverUrl, fit: BoxFit.contain),
             const Positioned(
               top: 8,
               left: 8,
@@ -234,29 +220,20 @@ class MessageBubble extends StatelessWidget {
   }
 
   Widget _buildMediaImage({
-    required BuildContext context,
     required String? url,
     required BoxFit fit,
   }) {
     if (localCoverBytes != null) {
-      return Image.memory(
-        localCoverBytes!,
-        fit: fit,
-        gaplessPlayback: true,
-      );
+      return Image.memory(localCoverBytes!, fit: fit, gaplessPlayback: true);
     }
     if (localCoverPath != null && localCoverPath!.trim().isNotEmpty) {
-      return Image.file(
-        File(localCoverPath!),
-        fit: fit,
-        gaplessPlayback: true,
-      );
+      return Image.file(File(localCoverPath!), fit: fit, gaplessPlayback: true);
     }
     if (url == null || url.trim().isEmpty) {
       return const _NeutralPlaceholder();
     }
     return Image(
-      image: CachedNetworkImageProvider(_resolveUrl(context, url)),
+      image: CachedNetworkImageProvider(urlResolver.resolve(url)),
       fit: fit,
       gaplessPlayback: true,
       filterQuality: FilterQuality.medium,
@@ -300,16 +277,6 @@ class MessageBubble extends StatelessWidget {
     final minutes = totalSeconds ~/ 60;
     final seconds = totalSeconds % 60;
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
-  }
-
-  String _resolveUrl(BuildContext context, String url) {
-    final parsed = Uri.tryParse(url);
-    if (parsed != null && parsed.hasScheme) {
-      return url;
-    }
-    final base = Uri.parse(context.read<AppState>().apiBaseUrl);
-    final path = url.startsWith('/') ? url : '/$url';
-    return base.replace(path: path, query: null, fragment: null).toString();
   }
 }
 

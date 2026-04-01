@@ -1,4 +1,4 @@
-import 'package:dynamic_photo_chat_flutter/models/message.dart';
+import 'package:vox_flutter/models/message.dart';
 
 class ChatConversationUpdate {
   const ChatConversationUpdate({

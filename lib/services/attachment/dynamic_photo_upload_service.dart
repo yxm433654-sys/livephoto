@@ -1,13 +1,13 @@
-import 'package:dynamic_photo_chat_flutter/models/dynamic_media_pick_result.dart';
-import 'package:dynamic_photo_chat_flutter/models/file_upload_response.dart';
-import 'package:dynamic_photo_chat_flutter/services/file_service.dart';
+﻿import 'package:vox_flutter/models/dynamic_media_pick_result.dart';
+import 'package:vox_flutter/models/attachment_upload_response.dart';
+import 'package:vox_flutter/services/attachment/attachment_service.dart';
 
-class DynamicMediaUploadService {
-  const DynamicMediaUploadService(this._files);
+class DynamicPhotoUploadService {
+  const DynamicPhotoUploadService(this._files);
 
-  final FileService _files;
+  final AttachmentService _files;
 
-  Future<FileUploadResponse> upload({
+  Future<AttachmentUploadResponse> upload({
     required DynamicMediaPickResult pickResult,
     required int userId,
   }) async {
@@ -30,3 +30,5 @@ class DynamicMediaUploadService {
     }
   }
 }
+
+

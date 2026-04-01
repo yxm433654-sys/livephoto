@@ -1,4 +1,4 @@
-package com.chatapp.dynamic_photo_chat_flutter
+package com.vox.flutter
 
 import io.flutter.embedding.android.FlutterActivity
 

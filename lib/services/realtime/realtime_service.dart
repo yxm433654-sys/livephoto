@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:dynamic_photo_chat_flutter/models/message.dart';
-import 'package:dynamic_photo_chat_flutter/services/message_service.dart';
+import 'package:vox_flutter/models/message.dart';
+import 'package:vox_flutter/services/message/message_service.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 class RealtimeService {

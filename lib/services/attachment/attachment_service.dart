@@ -1,18 +1,18 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:dynamic_photo_chat_flutter/models/api_response.dart';
-import 'package:dynamic_photo_chat_flutter/models/file_upload_response.dart';
-import 'package:dynamic_photo_chat_flutter/services/api_config.dart';
-import 'package:dynamic_photo_chat_flutter/utils/user_error_message.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:vox_flutter/models/api_response.dart';
+import 'package:vox_flutter/models/attachment_upload_response.dart';
+import 'package:vox_flutter/services/network/api_config.dart';
+import 'package:vox_flutter/utils/user_error_message.dart';
 
-class FileService {
-  FileService({
+class AttachmentService {
+  AttachmentService({
     String? baseUrl,
     http.Client? httpClient,
     Duration? connectionTimeout,
@@ -39,15 +39,17 @@ class FileService {
     try {
       return await run();
     } on SocketException {
-      throw Exception('无法连接服务器，请检查网络和接口地址设置。');
+      throw Exception(
+        'Network connection failed. Please check the server address and try again.',
+      );
     } on TimeoutException {
-      throw Exception('上传超时，请稍后重试。');
+      throw Exception('Request timed out. Please try again.');
     } catch (error) {
       throw Exception(UserErrorMessage.from(error));
     }
   }
 
-  Future<FileUploadResponse> uploadNormal({
+  Future<AttachmentUploadResponse> uploadNormal({
     required PlatformFile file,
     int? userId,
   }) async {
@@ -58,7 +60,7 @@ class FileService {
     );
   }
 
-  Future<FileUploadResponse> uploadNormalFromXFile({
+  Future<AttachmentUploadResponse> uploadNormalFromXFile({
     required XFile file,
     int? userId,
   }) async {
@@ -75,7 +77,7 @@ class FileService {
     );
   }
 
-  Future<FileUploadResponse> uploadNormalFromPath({
+  Future<AttachmentUploadResponse> uploadNormalFromPath({
     required String filePath,
     int? userId,
   }) async {
@@ -86,7 +88,7 @@ class FileService {
     );
   }
 
-  Future<FileUploadResponse> uploadLivePhoto({
+  Future<AttachmentUploadResponse> uploadLivePhoto({
     required PlatformFile jpeg,
     required PlatformFile mov,
     int? userId,
@@ -101,7 +103,7 @@ class FileService {
     );
   }
 
-  Future<FileUploadResponse> uploadLivePhotoAuto({
+  Future<AttachmentUploadResponse> uploadLivePhotoAuto({
     required String jpegPath,
     required String movPath,
     int? userId,
@@ -116,7 +118,7 @@ class FileService {
     );
   }
 
-  Future<FileUploadResponse> uploadMotionPhoto({
+  Future<AttachmentUploadResponse> uploadMotionPhoto({
     required PlatformFile file,
     int? userId,
   }) async {
@@ -127,7 +129,7 @@ class FileService {
     );
   }
 
-  Future<FileUploadResponse> uploadMotionPhotoFromPath({
+  Future<AttachmentUploadResponse> uploadMotionPhotoFromPath({
     required String filePath,
     int? userId,
   }) async {
@@ -138,48 +140,47 @@ class FileService {
     );
   }
 
-  Future<FileUploadResponse> _uploadMultipart({
+  Future<AttachmentUploadResponse> preview({required int fileId}) async {
+    return _guard(() async {
+      final response = await _http
+          .get(_uri('/api/files/preview/$fileId'))
+          .timeout(_requestTimeout);
+      final parsed =
+          jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+      final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
+      if (!api.success) {
+        throw Exception(api.message ?? 'Attachment preview failed. Please try again.');
+      }
+      return AttachmentUploadResponse.fromJson(api.data);
+    });
+  }
+
+  Future<AttachmentUploadResponse> _uploadMultipart({
     required String path,
     required List<http.MultipartFile> files,
     int? userId,
     Map<String, String>? fields,
   }) async {
     return _guard(() async {
-      final req = http.MultipartRequest('POST', _uri(path));
+      final request = http.MultipartRequest('POST', _uri(path));
       if (userId != null) {
-        req.fields['userId'] = userId.toString();
+        request.fields['userId'] = userId.toString();
       }
       if (fields != null) {
-        req.fields.addAll(fields);
+        request.fields.addAll(fields);
       }
-      req.files.addAll(files);
+      request.files.addAll(files);
 
-      final streamed = await _http.send(req).timeout(_requestTimeout);
-      final res = await http.Response.fromStream(streamed).timeout(
-        _requestTimeout,
-      );
+      final streamed = await _http.send(request).timeout(_requestTimeout);
+      final response =
+          await http.Response.fromStream(streamed).timeout(_requestTimeout);
       final parsed =
-          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+          jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
       final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
       if (!api.success) {
-        throw Exception(api.message ?? '上传失败，请稍后重试。');
+        throw Exception(api.message ?? 'Attachment upload failed. Please try again.');
       }
-      return FileUploadResponse.fromJson(api.data);
-    });
-  }
-
-  Future<FileUploadResponse> preview({required int fileId}) async {
-    return _guard(() async {
-      final res = await _http.get(_uri('/api/files/preview/$fileId')).timeout(
-            _requestTimeout,
-          );
-      final parsed =
-          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
-      final api = ApiResponse.fromJson<Object?>(parsed, (raw) => raw);
-      if (!api.success) {
-        throw Exception(api.message ?? '预览信息获取失败，请稍后重试。');
-      }
-      return FileUploadResponse.fromJson(api.data);
+      return AttachmentUploadResponse.fromJson(api.data);
     });
   }
 
@@ -195,8 +196,9 @@ class FileService {
       );
     }
     if (file.path == null) {
-      throw Exception('文件路径为空');
+      throw Exception('Unable to read the selected file.');
     }
     return http.MultipartFile.fromPath(field, file.path!, filename: file.name);
   }
 }
+

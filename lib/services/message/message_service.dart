@@ -1,5 +1,5 @@
-import 'package:dynamic_photo_chat_flutter/models/message.dart';
-import 'package:dynamic_photo_chat_flutter/services/api_client.dart';
+import 'package:vox_flutter/models/message.dart';
+import 'package:vox_flutter/services/network/api_client.dart';
 
 class MessageService {
   MessageService(this._api);

@@ -1,6 +1,6 @@
-import 'package:dynamic_photo_chat_flutter/models/session.dart';
-import 'package:dynamic_photo_chat_flutter/models/user.dart';
-import 'package:dynamic_photo_chat_flutter/services/api_client.dart';
+import 'package:vox_flutter/models/session.dart';
+import 'package:vox_flutter/models/user.dart';
+import 'package:vox_flutter/services/network/api_client.dart';
 
 class AuthService {
   AuthService(this._api);

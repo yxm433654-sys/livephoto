@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 class ChatComposer extends StatelessWidget {
   const ChatComposer({
@@ -153,7 +153,7 @@ class ChatComposer extends StatelessWidget {
 }
 
 class _ComposerIconButton extends StatelessWidget {
-const _ComposerIconButton({
+  const _ComposerIconButton({
     required this.icon,
     required this.onTap,
     this.active = false,

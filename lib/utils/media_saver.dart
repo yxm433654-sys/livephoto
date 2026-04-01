@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:dynamic_photo_chat_flutter/utils/media_downloader.dart';
+import 'package:vox_flutter/utils/media_downloader.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 class MediaSaver {

@@ -1,6 +1,6 @@
-import 'package:dynamic_photo_chat_flutter/models/dynamic_media_pick_result.dart';
-import 'package:dynamic_photo_chat_flutter/platform/android/android_dynamic_photo_resolver.dart';
-import 'package:dynamic_photo_chat_flutter/utils/live_photo_detector.dart';
+﻿import 'package:vox_flutter/models/dynamic_media_pick_result.dart';
+import 'package:vox_flutter/platform/android/android_dynamic_photo_resolver.dart';
+import 'package:vox_flutter/utils/dynamic_photo_detector.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 class StandardMotionPhotoStrategy extends AndroidDynamicPhotoStrategy {
@@ -13,7 +13,7 @@ class StandardMotionPhotoStrategy extends AndroidDynamicPhotoStrategy {
       return null;
     }
     final isMotionPhoto =
-        await LivePhotoDetector.detectMotionPhotoFromPath(file.path);
+        await DynamicPhotoDetector.detectAndroidMotionPhotoFromPath(file.path);
     if (!isMotionPhoto) {
       return null;
     }
@@ -24,3 +24,4 @@ class StandardMotionPhotoStrategy extends AndroidDynamicPhotoStrategy {
     );
   }
 }
+

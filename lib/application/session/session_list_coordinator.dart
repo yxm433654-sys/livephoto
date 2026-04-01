@@ -1,12 +1,39 @@
-import 'package:dynamic_photo_chat_flutter/application/session/session_list_item_view_data.dart';
-import 'package:dynamic_photo_chat_flutter/models/chat_session_summary.dart';
-import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
+﻿import 'package:vox_flutter/application/session/session_list_facade.dart';
+import 'package:vox_flutter/application/session/session_list_item_view_data.dart';
+import 'package:vox_flutter/application/session/session_list_state.dart';
+import 'package:vox_flutter/models/chat_session_summary.dart';
 
 class SessionListCoordinator {
   const SessionListCoordinator();
 
-  List<SessionListItemViewData> buildItems(AppState state) {
-    return state.orderedPeerIds().map((peerId) {
+  SessionListFacade buildFacade({
+    required SessionListState state,
+    required Future<void> Function(int userId) prefetchUser,
+    required Future<void> Function(int peerId) addPeer,
+    required Future<void> Function(int peerId) removePeer,
+    required void Function(int peerId) clearUnread,
+    required String Function(int peerId) displayNameFor,
+    required void Function() clearConnectionNotice,
+    required Future<void> Function() logout,
+  }) {
+    return SessionListFacade(
+      currentUsername: state.currentUsername,
+      currentUserId: state.currentUserId,
+      currentAvatarUrl: state.currentAvatarUrl,
+      connectionNotice: state.connectionNotice,
+      items: _buildItems(state),
+      prefetchUser: prefetchUser,
+      addPeer: addPeer,
+      removePeer: removePeer,
+      clearUnread: clearUnread,
+      displayNameFor: displayNameFor,
+      clearConnectionNotice: clearConnectionNotice,
+      logout: logout,
+    );
+  }
+
+  List<SessionListItemViewData> _buildItems(SessionListState state) {
+    return state.orderedPeerIds.map((peerId) {
       final summary = state.sessionSummaryFor(peerId);
       final unread = summary?.unreadCount ?? state.unreadCount(peerId);
       final name = summary?.peerUsername?.trim().isNotEmpty == true

@@ -1,7 +1,7 @@
 import 'dart:convert';
 
-import 'package:dynamic_photo_chat_flutter/models/api_response.dart';
-import 'package:dynamic_photo_chat_flutter/services/api_config.dart';
+import 'package:vox_flutter/models/api_response.dart';
+import 'package:vox_flutter/services/network/api_config.dart';
 import 'package:http/http.dart' as http;
 
 class ApiClient {

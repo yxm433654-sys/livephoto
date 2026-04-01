@@ -1,7 +1,7 @@
-import 'package:dynamic_photo_chat_flutter/models/user.dart';
-import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:vox_flutter/models/user.dart';
+import 'package:vox_flutter/state/app_state.dart';
 
 class AddConversationDialog extends StatefulWidget {
   const AddConversationDialog({super.key});
@@ -27,7 +27,7 @@ class _AddConversationDialogState extends State<AddConversationDialog> {
     if (username.isEmpty) {
       setState(() {
         _foundUser = null;
-        _error = '请输入用户名';
+        _error = '请输入用户名。';
       });
       return;
     }
@@ -37,7 +37,7 @@ class _AddConversationDialogState extends State<AddConversationDialog> {
     if (session != null && session.username == username) {
       setState(() {
         _foundUser = null;
-        _error = '不能添加自己';
+        _error = '不能添加自己。';
       });
       return;
     }
@@ -49,11 +49,14 @@ class _AddConversationDialogState extends State<AddConversationDialog> {
     });
 
     final user = await appState.findUserByUsername(username);
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
+
     setState(() {
       _searching = false;
       _foundUser = user;
-      _error = user == null ? '没有找到这个用户' : null;
+      _error = user == null ? '没有找到这个用户。' : null;
     });
   }
 

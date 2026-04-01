@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
+import 'package:vox_flutter/state/app_state.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 

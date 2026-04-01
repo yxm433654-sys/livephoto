@@ -1,22 +1,27 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
+﻿import 'dart:async';
 
-import 'package:dynamic_photo_chat_flutter/models/chat_session_summary.dart';
-import 'package:dynamic_photo_chat_flutter/models/message.dart';
-import 'package:dynamic_photo_chat_flutter/models/session.dart';
-import 'package:dynamic_photo_chat_flutter/models/user.dart';
-import 'package:dynamic_photo_chat_flutter/services/api_client.dart';
-import 'package:dynamic_photo_chat_flutter/services/api_config.dart';
-import 'package:dynamic_photo_chat_flutter/services/auth_service.dart';
-import 'package:dynamic_photo_chat_flutter/services/file_service.dart';
-import 'package:dynamic_photo_chat_flutter/services/message_service.dart';
-import 'package:dynamic_photo_chat_flutter/services/realtime_service.dart';
-import 'package:dynamic_photo_chat_flutter/services/session_service.dart';
-import 'package:dynamic_photo_chat_flutter/services/server_config_store.dart';
-import 'package:dynamic_photo_chat_flutter/utils/user_error_message.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:vox_flutter/application/session/account_flow.dart';
+import 'package:vox_flutter/application/realtime/realtime_workflow_coordinator.dart';
+import 'package:vox_flutter/application/session/service_bundle_factory.dart';
+import 'package:vox_flutter/application/session/session_lifecycle.dart';
+import 'package:vox_flutter/application/realtime/realtime_runtime_state.dart';
+import 'package:vox_flutter/application/session/session_directory.dart';
+import 'package:vox_flutter/application/session/session_directory_flow.dart';
+import 'package:vox_flutter/application/session/session_scope_store.dart';
+import 'package:vox_flutter/application/session/session_persistence.dart';
+import 'package:vox_flutter/models/chat_session_summary.dart';
+import 'package:vox_flutter/models/message.dart';
+import 'package:vox_flutter/models/session.dart';
+import 'package:vox_flutter/models/user.dart';
+import 'package:vox_flutter/services/network/api_client.dart';
+import 'package:vox_flutter/services/network/api_config.dart';
+import 'package:vox_flutter/services/auth/auth_service.dart';
+import 'package:vox_flutter/services/attachment/attachment_service.dart';
+import 'package:vox_flutter/services/message/message_service.dart';
+import 'package:vox_flutter/services/network/server_config_store.dart';
+import 'package:vox_flutter/services/session/session_service.dart';
 
 class AppState extends ChangeNotifier {
   AppState() {
@@ -25,152 +30,97 @@ class AppState extends ChangeNotifier {
     _buildServices();
   }
 
-  static const _sessionKey = 'session';
-  static const _peersKey = 'peers';
-  static const _lastMsgIdKey = 'lastMessageId';
-
   late ApiClient api;
   late AuthService auth;
   late MessageService messages;
   late SessionService sessions;
-  late FileService files;
+  late AttachmentService attachments;
 
   SharedPreferences? _prefs;
   Session? session;
-  List<int> peers = <int>[];
-  List<ChatSessionSummary> conversationSummaries = <ChatSessionSummary>[];
   late String apiBaseUrl;
   late String wsBaseUrl;
   final ServerConfigStore _serverConfigStore = ServerConfigStore();
+  final SessionDirectory _sessionDirectory = SessionDirectory();
+  final AccountFlow _accountFlow =
+      const AccountFlow();
+  final ServiceBundleFactory _bundleFactory =
+      const ServiceBundleFactory();
+  final SessionLifecycle _sessionLifecycle =
+      const SessionLifecycle();
+  final SessionDirectoryFlow _sessionDirectoryCoordinator =
+      const SessionDirectoryFlow();
+  final SessionPersistence _sessionPersistence =
+      const SessionPersistence();
+  final SessionScopeStore _sessionScopeStore = const SessionScopeStore();
 
-  final Map<int, int> _unreadByPeer = <int, int>{};
-  final Map<int, UserProfile> _userCache = <int, UserProfile>{};
-  final Map<int, Future<UserProfile?>> _userFetches =
-      <int, Future<UserProfile?>>{};
   final StreamController<ChatMessage> _messageEvents =
       StreamController<ChatMessage>.broadcast();
-  RealtimeService? _realtime;
+  final RealtimeWorkflowCoordinator _realtimeWorkflowCoordinator =
+      RealtimeWorkflowCoordinator();
+  final RealtimeRuntimeState _realtimeRuntimeState = RealtimeRuntimeState();
   Stream<ChatMessage> get messageEvents => _messageEvents.stream;
-  int _lastMessageId = 0;
-  String? connectionNotice;
+  String? get connectionNotice => _realtimeRuntimeState.connectionNotice;
 
-  int unreadCount(int peerId) => _unreadByPeer[peerId] ?? 0;
+  List<int> get peers => _sessionDirectory.peers;
+  List<ChatSessionSummary> get conversationSummaries =>
+      _sessionDirectory.conversationSummaries;
 
-  List<int> orderedPeerIds() {
-    final ordered = <int>[];
-    final seen = <int>{};
-    for (final item in conversationSummaries) {
-      if (seen.add(item.peerId)) {
-        ordered.add(item.peerId);
-      }
-    }
-    for (final peerId in peers) {
-      if (seen.add(peerId)) {
-        ordered.add(peerId);
-      }
-    }
-    return ordered;
-  }
+  int unreadCount(int peerId) => _sessionDirectory.unreadCount(peerId);
 
-  ChatSessionSummary? sessionSummaryFor(int peerId) {
-    for (final item in conversationSummaries) {
-      if (item.peerId == peerId) {
-        return item;
-      }
-    }
-    return null;
-  }
+  List<int> orderedPeerIds() => _sessionDirectory.orderedPeerIds();
 
-  String displayNameFor(int userId) {
-    final cached = _userCache[userId];
-    final name = cached?.username.trim();
-    if (name != null && name.isNotEmpty) return name;
-    return '用户 $userId';
-  }
+  ChatSessionSummary? sessionSummaryFor(int peerId) =>
+      _sessionDirectory.sessionSummaryFor(peerId);
 
-  String? avatarUrlFor(int userId) {
-    final url = _userCache[userId]?.avatarUrl;
-    if (url == null) return null;
-    final v = url.trim();
-    if (v.isEmpty) return null;
-    final parsed = Uri.tryParse(v);
-    if (parsed != null && parsed.hasScheme) return v;
-    final base = Uri.parse(apiBaseUrl);
-    final path = v.startsWith('/') ? v : '/$v';
-    return base.replace(path: path, query: null, fragment: null).toString();
-  }
+  String displayNameFor(int userId) => _sessionDirectory.displayNameFor(userId);
+
+  String? avatarUrlFor(int userId) =>
+      _sessionDirectory.avatarUrlFor(userId, apiBaseUrl);
 
   Future<UserProfile?> prefetchUser(int userId) {
-    if (userId <= 0) return Future<UserProfile?>.value(null);
-    final cached = _userCache[userId];
-    if (cached != null) return Future<UserProfile?>.value(cached);
-    final existing = _userFetches[userId];
-    if (existing != null) return existing;
-
-    final future = () async {
-      try {
-        final profile = await auth.getUser(userId);
-        _userCache[userId] = profile;
-        notifyListeners();
-        return profile;
-      } catch (_) {
-        return null;
-      } finally {
-        _userFetches.remove(userId);
-      }
-    }();
-
-    _userFetches[userId] = future;
-    return future;
+    return _sessionDirectoryCoordinator.prefetchUser(
+      userId: userId,
+      authService: auth,
+      sessionDirectory: _sessionDirectory,
+      notifyListeners: notifyListeners,
+    );
   }
 
   Future<UserProfile?> findUserByUsername(String username) async {
-    final trimmed = username.trim();
-    if (trimmed.isEmpty) return null;
-    for (final user in _userCache.values) {
-      if (user.username == trimmed) {
-        return user;
-      }
-    }
-    try {
-      final user = await auth.getUserByUsername(trimmed);
-      _userCache[user.userId] = user;
-      notifyListeners();
-      return user;
-    } catch (_) {
-      return null;
-    }
+    return _sessionDirectoryCoordinator.findUserByUsername(
+      username: username,
+      authService: auth,
+      sessionDirectory: _sessionDirectory,
+      notifyListeners: notifyListeners,
+    );
   }
 
   void clearUnread(int peerId) {
-    if (!_unreadByPeer.containsKey(peerId)) return;
-    _unreadByPeer.remove(peerId);
-    notifyListeners();
+    _sessionDirectoryCoordinator.clearUnread(
+      peerId: peerId,
+      sessionDirectory: _sessionDirectory,
+      notifyListeners: notifyListeners,
+    );
   }
 
   void clearConnectionNotice() {
     if (connectionNotice == null) return;
-    connectionNotice = null;
+    _realtimeRuntimeState.clearConnectionNotice();
     notifyListeners();
   }
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
-    final endpoints = await _serverConfigStore.load(_prefs!);
-    apiBaseUrl = endpoints.apiBaseUrl;
-    wsBaseUrl = endpoints.wsBaseUrl;
-    _buildServices();
-
-    final raw = _prefs!.getString(_sessionKey);
-    if (raw != null) {
-      session = Session.fromJson(jsonDecode(raw));
-    }
-
-    await _restoreSessionScopedState();
-    if (session != null) {
-      await refreshSessions(notify: false);
-      _startRealtime();
-    }
+    final bootstrapResult = await _accountFlow.initialize(
+      preferences: _prefs!,
+      serverConfigStore: _serverConfigStore,
+      rebuildServices: _rebuildServices,
+      syncSignedInState: _syncSignedInState,
+    );
+    apiBaseUrl = bootstrapResult.apiBaseUrl;
+    wsBaseUrl = bootstrapResult.wsBaseUrl;
+    session = bootstrapResult.session;
     notifyListeners();
   }
 
@@ -178,31 +128,32 @@ class AppState extends ChangeNotifier {
     required String apiBaseUrl,
     String? wsBaseUrl,
   }) async {
-    final preferences = _prefs;
-    if (preferences == null) return;
-    final endpoints = await _serverConfigStore.save(
-      preferences,
+    final result = await _accountFlow.updateEndpoints(
+      preferences: _prefs,
       apiBaseUrl: apiBaseUrl,
       wsBaseUrl: wsBaseUrl,
+      session: session,
+      serverConfigStore: _serverConfigStore,
+      rebuildServices: _rebuildServices,
+      syncSignedInState: _syncSignedInState,
     );
-    this.apiBaseUrl = endpoints.apiBaseUrl;
-    this.wsBaseUrl = endpoints.wsBaseUrl;
-    _buildServices();
-    if (session != null) {
-      await refreshSessions(notify: false);
-      _startRealtime();
-    }
+    if (result == null) return;
+    this.apiBaseUrl = result.apiBaseUrl;
+    this.wsBaseUrl = result.wsBaseUrl;
     notifyListeners();
   }
 
   Future<void> login(String username, String password) async {
-    final nextSession = await auth.login(username: username, password: password);
-    _stopRealtime();
+    final nextSession = await _accountFlow.login(
+      username: username,
+      password: password,
+      authService: auth,
+      stopRealtime: () async => _stopRealtime(),
+      persistSession: (next) =>
+          _sessionLifecycle.persistSession(_prefs, next),
+      syncSignedInState: _syncSignedInState,
+    );
     session = nextSession;
-    await _prefs?.setString(_sessionKey, jsonEncode(nextSession.toJson()));
-    await _restoreSessionScopedState();
-    await refreshSessions(notify: false);
-    _startRealtime();
     notifyListeners();
   }
 
@@ -211,134 +162,74 @@ class AppState extends ChangeNotifier {
     String password, {
     String? avatarUrl,
   }) async {
-    await auth.register(
+    await _accountFlow.register(
       username: username,
       password: password,
       avatarUrl: avatarUrl,
+      authService: auth,
+      login: login,
     );
-    await login(username, password);
   }
 
   Future<void> logout() async {
-    _stopRealtime();
     session = null;
-    peers = <int>[];
-    conversationSummaries = <ChatSessionSummary>[];
-    _lastMessageId = 0;
-    connectionNotice = null;
-    await _prefs?.remove(_sessionKey);
-    _unreadByPeer.clear();
-    _userCache.clear();
-    _userFetches.clear();
+    await _accountFlow.logout(
+      clearSignedOutState: () => _sessionLifecycle.clearSignedOutState(
+        preferences: _prefs,
+        stopRealtime: () async => _stopRealtime(),
+        clearSessionDirectory: _sessionDirectory.clearAll,
+        clearConnectionNotice: _realtimeRuntimeState.clearConnectionNotice,
+        resetLastMessageId: _realtimeRuntimeState.resetLastMessageId,
+      ),
+    );
     notifyListeners();
   }
 
   Future<void> addPeer(int peerId) async {
-    if (peerId <= 0) return;
-    if (!peers.contains(peerId)) {
-      peers = [...peers, peerId];
-      await _savePeers();
-      notifyListeners();
-    }
+    await _sessionDirectoryCoordinator.addPeer(
+      peerId: peerId,
+      sessionDirectory: _sessionDirectory,
+      persistPeers: _savePeers,
+      notifyListeners: notifyListeners,
+    );
   }
 
   Future<void> removePeer(int peerId) async {
-    if (!peers.contains(peerId)) return;
-    peers = peers.where((e) => e != peerId).toList();
-    await _savePeers();
-    conversationSummaries =
-        conversationSummaries.where((e) => e.peerId != peerId).toList();
-    _unreadByPeer.remove(peerId);
-    notifyListeners();
+    await _sessionDirectoryCoordinator.removePeer(
+      peerId: peerId,
+      sessionDirectory: _sessionDirectory,
+      persistPeers: _savePeers,
+      notifyListeners: notifyListeners,
+    );
   }
 
   Future<void> refreshSessions({bool notify = true}) async {
-    final currentSession = session;
-    if (currentSession == null) {
-      conversationSummaries = <ChatSessionSummary>[];
-      if (notify) {
-        notifyListeners();
-      }
-      return;
-    }
-
-    try {
-      final items = await sessions.list(userId: currentSession.userId);
-      conversationSummaries = items;
-      for (final item in items) {
-        _unreadByPeer[item.peerId] = item.unreadCount;
-        final username = item.peerUsername?.trim();
-        if (username != null && username.isNotEmpty) {
-          final cached = _userCache[item.peerId];
-          _userCache[item.peerId] = UserProfile(
-            userId: item.peerId,
-            username: username,
-            avatarUrl: item.peerAvatarUrl ?? cached?.avatarUrl,
-            status: cached?.status,
-            createdAt: cached?.createdAt,
-          );
-        }
-      }
-    } catch (_) {
-      // Keep local peer list as a fallback if session sync fails.
-    }
-
-    if (notify) {
-      notifyListeners();
-    }
+    await _sessionDirectoryCoordinator.refreshSessions(
+      session: session,
+      sessionService: sessions,
+      sessionDirectory: _sessionDirectory,
+      notifyListeners: notifyListeners,
+      notify: notify,
+    );
   }
 
   void _startRealtime() {
-    final currentSession = session;
-    if (currentSession == null) return;
-
-    _stopRealtime();
-    final rt = RealtimeService(messages, wsBaseUrl: wsBaseUrl);
-    rt.start(
-      userId: currentSession.userId,
-      token: currentSession.token,
-      lastMessageId: _lastMessageId,
-      onMessage: (message) async {
-        if (message.id > _lastMessageId) {
-          _lastMessageId = message.id;
-          await _saveLastMessageId();
-        }
-        if (connectionNotice != null) {
-          connectionNotice = null;
-          notifyListeners();
-        }
-        _messageEvents.add(message);
-
-        final myId = currentSession.userId;
-        if (message.receiverId == myId) {
-          await addPeer(message.senderId);
-          if ((message.status ?? '').toUpperCase() != 'READ') {
-            _unreadByPeer[message.senderId] =
-                (_unreadByPeer[message.senderId] ?? 0) + 1;
-            notifyListeners();
-          }
-        }
-      },
-      onSessionChanged: () {
-        refreshSessions();
-      },
-      onError: (_) {
-        final nextNotice = UserErrorMessage.from(
-          const HttpException('connection closed before full header was received'),
-        );
-        if (connectionNotice == nextNotice) {
-          return;
-        }
-        connectionNotice = nextNotice;
-        notifyListeners();
-      },
+    _realtimeWorkflowCoordinator.start(
+      session: session,
+      messageService: messages,
+      wsBaseUrl: wsBaseUrl,
+      sessionDirectory: _sessionDirectory,
+      messageEvents: _messageEvents,
+      realtimeRuntimeState: _realtimeRuntimeState,
+      persistLastMessageId: _saveLastMessageId,
+      ensurePeer: addPeer,
+      refreshSessions: () => refreshSessions(),
+      notifyListeners: notifyListeners,
     );
-    _realtime = rt;
   }
 
   void _stopRealtime() {
-    _realtime?.stop();
-    _realtime = null;
+    _realtimeWorkflowCoordinator.stop();
   }
 
   @override
@@ -349,37 +240,59 @@ class AppState extends ChangeNotifier {
   }
 
   void _buildServices() {
-    api = ApiClient(baseUrl: apiBaseUrl);
-    auth = AuthService(api);
-    messages = MessageService(api);
-    sessions = SessionService(api);
-    files = FileService(baseUrl: apiBaseUrl);
+    final bundle = _bundleFactory.build(apiBaseUrl: apiBaseUrl);
+    api = bundle.apiClient;
+    auth = bundle.authService;
+    messages = bundle.messageService;
+    sessions = bundle.sessionService;
+    attachments = bundle.attachmentService;
   }
+
+  Future<void> _rebuildServices(String nextApiBaseUrl, String nextWsBaseUrl) async {
+    apiBaseUrl = nextApiBaseUrl;
+    wsBaseUrl = nextWsBaseUrl;
+    _buildServices();
+  }
+
+  Future<void> _syncSignedInState(Session? nextSession) async {
+    session = nextSession;
+    await _sessionLifecycle.syncSignedInState(
+      session: session,
+      restoreScopedState: _restoreSessionScopedState,
+      refreshSessions: refreshSessions,
+      startRealtime: _startRealtime,
+    );
+  }
+
   Future<void> _restoreSessionScopedState() async {
-    peers = <int>[];
-    conversationSummaries = <ChatSessionSummary>[];
-    _lastMessageId = 0;
-    _unreadByPeer.clear();
-    final peerRaw = _prefs?.getStringList(_scopedKey(_peersKey));
-    if (peerRaw != null) {
-      peers = peerRaw.map((e) => int.tryParse(e)).whereType<int>().toList();
-    }
-    _lastMessageId = _prefs?.getInt(_scopedKey(_lastMsgIdKey)) ?? 0;
+    await _sessionPersistence.restoreScopedState(
+      preferences: _prefs,
+      session: session,
+      sessionDirectory: _sessionDirectory,
+      sessionScopeStore: _sessionScopeStore,
+      realtimeRuntimeState: _realtimeRuntimeState,
+    );
   }
 
   Future<void> _savePeers() async {
-    await _prefs?.setStringList(
-      _scopedKey(_peersKey),
-      peers.map((e) => e.toString()).toList(),
+    await _sessionPersistence.savePeers(
+      preferences: _prefs,
+      session: session,
+      sessionDirectory: _sessionDirectory,
+      sessionScopeStore: _sessionScopeStore,
     );
   }
 
   Future<void> _saveLastMessageId() async {
-    await _prefs?.setInt(_scopedKey(_lastMsgIdKey), _lastMessageId);
-  }
-
-  String _scopedKey(String base) {
-    final userId = session?.userId;
-    return userId == null ? base : '${base}_$userId';
+    await _sessionPersistence.saveLastMessageId(
+      preferences: _prefs,
+      session: session,
+      sessionScopeStore: _sessionScopeStore,
+      realtimeRuntimeState: _realtimeRuntimeState,
+    );
   }
 }
+
+
+
+

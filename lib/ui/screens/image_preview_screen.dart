@@ -1,5 +1,5 @@
-import 'package:flutter/material.dart';
-import 'package:dynamic_photo_chat_flutter/utils/media_saver.dart';
+﻿import 'package:flutter/material.dart';
+import 'package:vox_flutter/utils/media_saver.dart';
 
 class ImagePreviewScreen extends StatelessWidget {
   const ImagePreviewScreen({
@@ -29,7 +29,7 @@ class ImagePreviewScreen extends StatelessWidget {
                   ),
                   Expanded(
                     child: Text(
-                      title ?? '图片',
+                      title ?? 'Image',
                       textAlign: TextAlign.center,
                       style: const TextStyle(
                         color: Colors.white,
@@ -44,7 +44,7 @@ class ImagePreviewScreen extends StatelessWidget {
                         await MediaSaver.saveImageFromUrl(url, title: title);
                         if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('已保存到本地相册')),
+                          const SnackBar(content: Text('Saved to your photo library.')),
                         );
                       } catch (e) {
                         if (!context.mounted) return;
@@ -69,7 +69,7 @@ class ImagePreviewScreen extends StatelessWidget {
                     fit: BoxFit.contain,
                     errorBuilder: (_, __, ___) => const Center(
                       child: Text(
-                        '图片加载失败',
+                        'Unable to load this image.',
                         style: TextStyle(color: Colors.white),
                       ),
                     ),

@@ -1,16 +1,16 @@
-import 'dart:typed_data';
+﻿import 'dart:typed_data';
 
-import 'package:dynamic_photo_chat_flutter/models/chat_media.dart';
-import 'package:dynamic_photo_chat_flutter/models/file_upload_response.dart';
-import 'package:dynamic_photo_chat_flutter/models/media_draft_metadata.dart';
-import 'package:dynamic_photo_chat_flutter/models/message.dart';
-import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
-import 'package:dynamic_photo_chat_flutter/ui/chat/chat_local_message_factory.dart';
-import 'package:dynamic_photo_chat_flutter/utils/user_error_message.dart';
+import 'package:vox_flutter/application/message/message_workflow_facade.dart';
+import 'package:vox_flutter/models/chat_media.dart';
+import 'package:vox_flutter/models/attachment_upload_response.dart';
+import 'package:vox_flutter/models/media_draft_metadata.dart';
+import 'package:vox_flutter/models/message.dart';
+import 'package:vox_flutter/ui/chat/local_message_factory.dart';
+import 'package:vox_flutter/utils/user_error_message.dart';
 
 class MessageSender {
   MessageSender({
-    required this.appState,
+    required this.workflow,
     required this.peerId,
     required this.senderId,
     this.localMessageFactory,
@@ -22,10 +22,10 @@ class MessageSender {
     required this.showError,
   });
 
-  final AppState appState;
+  final MessageWorkflowFacade workflow;
   final int peerId;
   final int senderId;
-  final ChatLocalMessageFactory? localMessageFactory;
+  final LocalMessageFactory? localMessageFactory;
   final int Function() nextTempId;
   final void Function(
     ChatMessage message, {
@@ -60,7 +60,7 @@ class MessageSender {
 
     await _runSend(
       tempId: tempId,
-      sendRemote: () => appState.messages.sendText(
+      sendRemote: () => workflow.sendText(
         senderId: senderId,
         receiverId: peerId,
         content: trimmed,
@@ -101,11 +101,11 @@ class MessageSender {
     await _runSend(
       tempId: tempId,
       sendRemote: () async {
-        final upload = await appState.files.uploadNormalFromPath(
+        final upload = await workflow.uploadFileFromPath(
           filePath: filePath,
           userId: senderId,
         );
-        final messageId = await appState.messages.sendImage(
+        final messageId = await workflow.sendImage(
           senderId: senderId,
           receiverId: peerId,
           resourceId: upload.fileId!,
@@ -148,7 +148,7 @@ class MessageSender {
     await _runSend(
       tempId: tempId,
       sendRemote: () async {
-        final upload = await appState.files.uploadNormalFromPath(
+        final upload = await workflow.uploadFileFromPath(
           filePath: filePath,
           userId: senderId,
         );
@@ -156,7 +156,7 @@ class MessageSender {
         if (playId == null) {
           throw Exception('视频上传后未返回资源 ID');
         }
-        final messageId = await appState.messages.sendVideo(
+        final messageId = await workflow.sendVideo(
           senderId: senderId,
           receiverId: peerId,
           videoResourceId: playId,
@@ -181,7 +181,7 @@ class MessageSender {
   Future<void> sendDynamicPhoto({
     required String coverPath,
     Uint8List? previewBytes,
-    required Future<FileUploadResponse> Function(int userId) upload,
+    required Future<AttachmentUploadResponse> Function(int userId) upload,
     MediaDraftMetadata? metadata,
   }) async {
     final tempId = nextTempId();
@@ -205,9 +205,9 @@ class MessageSender {
       sendRemote: () async {
         final uploaded = await upload(senderId);
         if (uploaded.coverId == null || uploaded.videoId == null) {
-          throw Exception('动态图片上传后未返回完整资源');
+          throw Exception('动态照片上传后未返回完整资源');
         }
-        final messageId = await appState.messages.sendDynamicPhoto(
+        final messageId = await workflow.sendDynamicPhoto(
           senderId: senderId,
           receiverId: peerId,
           coverId: uploaded.coverId!,
@@ -266,7 +266,7 @@ class MessageSender {
     String? status,
   }) {
     final factory = localMessageFactory ??
-        ChatLocalMessageFactory(senderId: senderId, receiverId: peerId);
+        LocalMessageFactory(senderId: senderId, receiverId: peerId);
     return factory.build(
       id: id,
       type: type,
@@ -303,7 +303,7 @@ class MessageSender {
   }
 
   ChatMedia _buildImageMedia(
-    FileUploadResponse upload,
+    AttachmentUploadResponse upload,
     MediaDraftMetadata? metadata,
   ) {
     final width = upload.width ?? metadata?.width;
@@ -326,7 +326,7 @@ class MessageSender {
   }
 
   ChatMedia _buildVideoMedia(
-    FileUploadResponse upload,
+    AttachmentUploadResponse upload,
     MediaDraftMetadata? metadata,
   ) {
     final coverId = upload.coverId;
@@ -351,7 +351,7 @@ class MessageSender {
   }
 
   ChatMedia _buildDynamicMedia(
-    FileUploadResponse upload,
+    AttachmentUploadResponse upload,
     MediaDraftMetadata? metadata,
   ) {
     final width = upload.width ?? metadata?.width;
@@ -359,7 +359,7 @@ class MessageSender {
     return ChatMedia(
       mediaKind: 'DYNAMIC_PHOTO',
       processingStatus: 'PROCESSING',
-      resourceId: upload.coverId,
+      resourceId: upload.videoId,
       coverResourceId: upload.coverId,
       playResourceId: upload.videoId,
       coverUrl: upload.coverUrl,
@@ -374,17 +374,17 @@ class MessageSender {
   }
 
   double _aspectRatio(int? width, int? height, double fallback) {
-    if (width != null && height != null && width > 0 && height > 0) {
-      return width / height;
+    if (width == null || height == null || width <= 0 || height <= 0) {
+      return fallback;
     }
-    return fallback;
+    return width / height;
   }
 }
 
 class _ResolvedSend {
-  const _ResolvedSend({
-    required this.message,
-  });
+  const _ResolvedSend({required this.message});
 
   final ChatMessage message;
 }
+
+

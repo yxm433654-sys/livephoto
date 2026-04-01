@@ -1,7 +1,7 @@
-import 'package:dynamic_photo_chat_flutter/services/api_client.dart';
-import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:vox_flutter/services/network/api_client.dart';
+import 'package:vox_flutter/state/app_state.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -91,8 +91,8 @@ class _LoginScreenState extends State<LoginScreen>
     if (username.length < 2) return '用户名至少需要 2 个字符';
     if (password.isEmpty) return '请输入密码';
     if (password.length < 6) return '密码至少需要 6 位';
-    if (password.length > 32) return '密码长度不能超过 32 位';
-    if (username.length > 24) return '用户名长度不能超过 24 个字符';
+    if (password.length > 32) return '密码最多支持 32 位';
+    if (username.length > 24) return '用户名最多支持 24 个字符';
     return null;
   }
 
@@ -100,7 +100,7 @@ class _LoginScreenState extends State<LoginScreen>
     final raw = error.toString().replaceFirst('Exception: ', '').trim();
     final lower = raw.toLowerCase();
     if (isLogin) {
-      if (lower.contains('login failed')) return '用户名或密码错误';
+      if (lower.contains('login failed')) return '登录失败，请稍后重试';
       if (lower.contains('user not found')) return '用户不存在，请先注册';
       if (lower.contains('password')) return '密码错误，请重新输入';
     } else {
@@ -110,7 +110,9 @@ class _LoginScreenState extends State<LoginScreen>
     }
     if (lower.contains('timeout')) return '请求超时，请检查网络连接';
     if (lower.contains('connection')) return '连接失败，请检查 API 地址和网络';
-    return raw.isEmpty ? (isLogin ? '登录失败，请稍后重试' : '注册失败，请稍后重试') : raw;
+    return raw.isEmpty
+        ? (isLogin ? '登录失败，请稍后重试' : '注册失败，请稍后重试')
+        : raw;
   }
 
   Future<void> _editApiBaseUrl() async {
@@ -124,7 +126,7 @@ class _LoginScreenState extends State<LoginScreen>
         content: TextField(
           controller: controller,
           decoration: const InputDecoration(
-            labelText: 'API 基础地址',
+            labelText: 'API 服务地址',
             hintText: 'http://192.168.x.x:8080',
           ),
         ),
@@ -244,7 +246,7 @@ class _LoginScreenState extends State<LoginScreen>
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    '用图片、视频和 Live Photo 记录每一次聊天瞬间。',
+                    '用图片、视频和动态照片记录每一次聊天瞬间。',
                     style: TextStyle(color: Colors.grey.shade600, height: 1.5),
                   ),
                   const SizedBox(height: 18),
@@ -257,7 +259,7 @@ class _LoginScreenState extends State<LoginScreen>
                       border: Border.all(color: const Color(0xFFE5E7EB)),
                     ),
                     child: Text(
-                      'API：$apiBaseUrl',
+                      'API: $apiBaseUrl',
                       style: const TextStyle(
                         color: Color(0xFF64748B),
                         fontSize: 13,
@@ -377,7 +379,9 @@ class _AuthForm extends StatelessWidget {
             suffixIcon: IconButton(
               onPressed: onToggleObscure,
               icon: Icon(
-                obscureText ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                obscureText
+                    ? Icons.visibility_off_rounded
+                    : Icons.visibility_rounded,
               ),
             ),
           ),
@@ -386,7 +390,7 @@ class _AuthForm extends StatelessWidget {
         const Align(
           alignment: Alignment.centerLeft,
           child: Text(
-            '密码至少 6 位，建议使用字母和数字组合。',
+            '密码至少需要 6 位，建议包含字母和数字。',
             style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
           ),
         ),

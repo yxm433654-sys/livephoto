@@ -1,4 +1,4 @@
-import 'package:dynamic_photo_chat_flutter/models/chat_media.dart';
+import 'package:vox_flutter/models/chat_media.dart';
 
 class ChatMessage {
   ChatMessage({

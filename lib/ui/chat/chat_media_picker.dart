@@ -1,9 +1,9 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:dynamic_photo_chat_flutter/utils/live_photo_detector.dart';
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:vox_flutter/utils/dynamic_photo_detector.dart';
 
 enum ChatAttachAction {
   galleryImage,
@@ -51,24 +51,27 @@ class ChatMediaPicker {
                       label: '图片',
                       color: const Color(0xFFE0F2FE),
                       iconColor: const Color(0xFF0284C7),
-                      onTap: () =>
-                          Navigator.of(sheetContext).pop(ChatAttachAction.galleryImage),
+                      onTap: () => Navigator.of(sheetContext).pop(
+                        ChatAttachAction.galleryImage,
+                      ),
                     ),
                     _AttachTile(
                       icon: Icons.smart_display_outlined,
                       label: '视频',
                       color: const Color(0xFFDCFCE7),
                       iconColor: const Color(0xFF16A34A),
-                      onTap: () =>
-                          Navigator.of(sheetContext).pop(ChatAttachAction.galleryVideo),
+                      onTap: () => Navigator.of(sheetContext).pop(
+                        ChatAttachAction.galleryVideo,
+                      ),
                     ),
                     _AttachTile(
                       icon: Icons.motion_photos_on_outlined,
-                      label: '实况',
+                      label: '动态照片',
                       color: const Color(0xFFFCE7F3),
                       iconColor: const Color(0xFFDB2777),
-                      onTap: () =>
-                          Navigator.of(sheetContext).pop(ChatAttachAction.livePhoto),
+                      onTap: () => Navigator.of(sheetContext).pop(
+                        ChatAttachAction.livePhoto,
+                      ),
                     ),
                   ],
                 ),
@@ -100,18 +103,22 @@ class ChatMediaPicker {
       ),
     );
     if (paths.isEmpty) {
-      showSnack('没有找到媒体内容');
+      showSnack('没有找到媒体内容。');
       return null;
     }
 
     final rawAssets = await paths.first.getAssetListPaged(page: 0, size: 60);
     final assets = await _filterAssetsForMode(rawAssets, mode);
     if (assets.isEmpty) {
-      if (!context.mounted) return null;
+      if (!context.mounted) {
+        return null;
+      }
       showSnack(_pickerEmptyMessage(mode));
       return null;
     }
-    if (!context.mounted) return null;
+    if (!context.mounted) {
+      return null;
+    }
 
     return showModalBottomSheet<AssetEntity>(
       context: context,
@@ -211,7 +218,7 @@ class ChatMediaPicker {
       return asset.isLivePhoto;
     }
     if (Platform.isAndroid) {
-      return LivePhotoDetector.detectMotionPhoto(asset);
+      return DynamicPhotoDetector.detectAndroidMotionPhoto(asset);
     }
     return false;
   }
@@ -219,11 +226,11 @@ class ChatMediaPicker {
   static String _pickerEmptyMessage(ChatAssetPickerMode mode) {
     switch (mode) {
       case ChatAssetPickerMode.image:
-        return '没有找到图片';
+        return '没有找到图片。';
       case ChatAssetPickerMode.video:
-        return '没有找到视频';
+        return '没有找到视频。';
       case ChatAssetPickerMode.livePhoto:
-        return '没有找到实况图片';
+        return '没有找到动态照片。';
     }
   }
 }
@@ -334,3 +341,4 @@ class _AssetLiveBadge extends StatelessWidget {
     );
   }
 }
+

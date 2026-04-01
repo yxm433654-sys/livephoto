@@ -1,26 +1,22 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:dynamic_photo_chat_flutter/application/message/chat_conversation_coordinator.dart';
-import 'package:dynamic_photo_chat_flutter/models/file_upload_response.dart';
-import 'package:dynamic_photo_chat_flutter/models/media_draft_metadata.dart';
-import 'package:dynamic_photo_chat_flutter/models/message.dart';
-import 'package:dynamic_photo_chat_flutter/platform/dynamic/dynamic_photo_adapter.dart';
-import 'package:dynamic_photo_chat_flutter/services/dynamic_media_upload_service.dart';
-import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
-import 'package:dynamic_photo_chat_flutter/ui/chat/chat_composer.dart';
-import 'package:dynamic_photo_chat_flutter/ui/chat/chat_local_message_factory.dart';
-import 'package:dynamic_photo_chat_flutter/ui/chat/chat_message_list.dart';
-import 'package:dynamic_photo_chat_flutter/ui/chat/chat_media_navigator.dart';
-import 'package:dynamic_photo_chat_flutter/ui/chat/chat_media_picker.dart';
-import 'package:dynamic_photo_chat_flutter/ui/chat/chat_media_sender.dart';
-import 'package:dynamic_photo_chat_flutter/utils/media_downloader.dart';
-import 'package:dynamic_photo_chat_flutter/utils/user_error_message.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:intl/intl.dart';
-import 'package:photo_manager/photo_manager.dart';
 import 'package:provider/provider.dart';
+import 'package:vox_flutter/application/message/conversation_flow.dart';
+import 'package:vox_flutter/application/message/chat_media_action_handler.dart';
+import 'package:vox_flutter/application/message/chat_message_subscription.dart';
+import 'package:vox_flutter/application/message/media_url_resolver.dart';
+import 'package:vox_flutter/application/message/message_workflow_facade.dart';
+import 'package:vox_flutter/models/message.dart';
+import 'package:vox_flutter/state/app_state.dart';
+import 'package:vox_flutter/ui/chat/chat_composer.dart';
+import 'package:vox_flutter/ui/chat/local_message_factory.dart';
+import 'package:vox_flutter/ui/chat/chat_media_navigator.dart';
+import 'package:vox_flutter/ui/chat/dynamic_photo_adapter.dart';
+import 'package:vox_flutter/ui/chat/message_list.dart';
+import 'package:vox_flutter/ui/chat/message_sender.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key, required this.peerId});
@@ -36,23 +32,27 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollCtrl = ScrollController();
   final FocusNode _textFocusNode = FocusNode();
   final GlobalKey _moreButtonKey = GlobalKey();
-  final ChatConversationCoordinator _conversationCoordinator =
-      const ChatConversationCoordinator();
+  final ConversationFlow _conversationCoordinator =
+      const ConversationFlow();
+  final ChatMessageSubscription _messageSubscription =
+      const ChatMessageSubscription();
+  final DynamicPhotoAdapter _dynamicPhotoAdapter = const DynamicPhotoAdapter();
 
   final List<ChatMessage> _messages = <ChatMessage>[];
   final Map<int, Uint8List> _localCoverBytesByMessageId = <int, Uint8List>{};
   final Map<int, String> _localCoverPathByMessageId = <int, String>{};
-  ChatMediaNavigator? _chatMediaNavigator;
-  final DynamicPhotoAdapter _dynamicPhotoAdapter = const DynamicPhotoAdapter();
 
+  ChatMediaNavigator? _chatMediaNavigator;
+  MessageWorkflowFacade? _workflowFacade;
   StreamSubscription<ChatMessage>? _msgSub;
+
   bool _loading = true;
   bool _sending = false;
-  String? _error;
-  int _lastMessageId = 0;
   bool _userAtBottom = true;
-  int _tempMessageSeed = -1;
   bool _showEmojiPanel = false;
+  int _lastMessageId = 0;
+  int _tempMessageSeed = -1;
+  String? _error;
 
   @override
   void initState() {
@@ -74,24 +74,25 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onScroll() {
     if (!_scrollCtrl.hasClients) return;
     final max = _scrollCtrl.position.maxScrollExtent;
-    final cur = _scrollCtrl.position.pixels;
-    _userAtBottom = (max - cur) <= 80.0;
+    final current = _scrollCtrl.position.pixels;
+    _userAtBottom = (max - current) <= 80.0;
   }
 
   Future<void> _init() async {
     final state = context.read<AppState>();
+    final workflow = _workflow(state);
     final session = state.session;
     if (session == null) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = '请重新登录';
+        _error = '请重新登录后再试。';
       });
       return;
     }
 
     final conversationState = await _conversationCoordinator.initialize(
-      appState: state,
+      workflow: workflow,
       currentUserId: session.userId,
       peerId: widget.peerId,
     );
@@ -101,64 +102,48 @@ class _ChatScreenState extends State<ChatScreen> {
       ..addAll(conversationState.messages);
     _lastMessageId = conversationState.lastMessageId;
     _error = conversationState.errorMessage;
-    _subscribeToEvents(state, session.userId);
+    _subscribeToEvents(workflow, session.userId);
 
-    if (mounted) {
-      setState(() => _loading = false);
-      _scrollToBottom(animated: false);
-    }
+    if (!mounted) return;
+    setState(() => _loading = false);
+    _scrollToBottom(animated: false);
   }
 
-  void _subscribeToEvents(AppState state, int myId) {
+  void _subscribeToEvents(MessageWorkflowFacade workflow, int currentUserId) {
     _msgSub?.cancel();
-    _msgSub = state.messageEvents.listen((message) async {
-      if (!mounted) return;
-
-      final pendingIdBefore = _findPendingIdForIncoming(message, myId);
-      final update = await _conversationCoordinator.applyIncomingMessage(
-        appState: state,
-        currentMessages: _messages,
-        incomingMessage: message,
-        currentUserId: myId,
-        peerId: widget.peerId,
-        userAtBottom: _userAtBottom,
-      );
-      if (update == null) return;
-
-      setState(() {
-        _messages
-          ..clear()
-          ..addAll(update.messages);
-        if (pendingIdBefore != null) {
-          final localBytes = _localCoverBytesByMessageId.remove(pendingIdBefore);
-          final localPath = _localCoverPathByMessageId.remove(pendingIdBefore);
-          if (localBytes != null) {
-            _localCoverBytesByMessageId[message.id] = localBytes;
-          }
-          if (localPath != null) {
-            _localCoverPathByMessageId[message.id] = localPath;
-          }
+    _msgSub = _messageSubscription.bind(
+      workflow: workflow,
+      currentUserId: currentUserId,
+      peerId: widget.peerId,
+      currentMessages: _messages,
+      isUserAtBottom: () => _userAtBottom,
+      onBeforeApply: (incomingMessage, replacedTempId) {
+        if (replacedTempId == null) return;
+        final localBytes = _localCoverBytesByMessageId.remove(replacedTempId);
+        final localPath = _localCoverPathByMessageId.remove(replacedTempId);
+        if (localBytes != null) {
+          _localCoverBytesByMessageId[incomingMessage.id] = localBytes;
         }
-        if (update.lastMessageId > _lastMessageId) {
-          _lastMessageId = update.lastMessageId;
+        if (localPath != null) {
+          _localCoverPathByMessageId[incomingMessage.id] = localPath;
         }
-        _dropLocalPreviewIfRemoteReady(message);
-      });
-
-      if (update.shouldScrollToBottom) {
-        _scrollToBottom();
-      }
-    });
-  }
-
-  int? _findPendingIdForIncoming(ChatMessage message, int myId) {
-    final index = _conversationCoordinator.findPendingLocalIndex(
-      _messages,
-      message,
-      myId,
-      widget.peerId,
+      },
+      onUpdate: (update) {
+        if (!mounted) return;
+        setState(() {
+          _messages
+            ..clear()
+            ..addAll(update.conversationUpdate.messages);
+          if (update.conversationUpdate.lastMessageId > _lastMessageId) {
+            _lastMessageId = update.conversationUpdate.lastMessageId;
+          }
+          _dropLocalPreviewIfRemoteReady(update.incomingMessage);
+        });
+        if (update.conversationUpdate.shouldScrollToBottom) {
+          _scrollToBottom();
+        }
+      },
     );
-    return index >= 0 ? _messages[index].id : null;
   }
 
   void _scrollToBottom({bool animated = true}) {
@@ -175,10 +160,6 @@ class _ChatScreenState extends State<ChatScreen> {
         _scrollCtrl.jumpTo(target);
       }
     });
-  }
-
-  String _toUserError(Object error) {
-    return UserErrorMessage.from(error);
   }
 
   void _showSnack(String message) {
@@ -216,12 +197,101 @@ class _ChatScreenState extends State<ChatScreen> {
     return id;
   }
 
+  MessageWorkflowFacade _workflow(AppState state) {
+    return _workflowFacade ??= MessageWorkflowFacade(
+      messageEvents: state.messageEvents,
+      attachmentService: state.attachments,
+      prefetchPeer: state.prefetchUser,
+      clearUnread: state.clearUnread,
+      loadHistory: ({
+        required int userId,
+        required int peerId,
+        required int page,
+        required int size,
+      }) {
+        return state.messages.history(
+          userId: userId,
+          peerId: peerId,
+          page: page,
+          size: size,
+        );
+      },
+      markRead: state.messages.markRead,
+      sendText: ({
+        required int senderId,
+        required int receiverId,
+        required String content,
+      }) {
+        return state.messages.sendText(
+          senderId: senderId,
+          receiverId: receiverId,
+          content: content,
+        );
+      },
+      sendImage: ({
+        required int senderId,
+        required int receiverId,
+        required int resourceId,
+      }) {
+        return state.messages.sendImage(
+          senderId: senderId,
+          receiverId: receiverId,
+          resourceId: resourceId,
+        );
+      },
+      sendVideo: ({
+        required int senderId,
+        required int receiverId,
+        required int videoResourceId,
+        int? coverResourceId,
+      }) {
+        return state.messages.sendVideo(
+          senderId: senderId,
+          receiverId: receiverId,
+          videoResourceId: videoResourceId,
+          coverResourceId: coverResourceId,
+        );
+      },
+      sendDynamicPhoto: ({
+        required int senderId,
+        required int receiverId,
+        required int coverId,
+        required int videoId,
+      }) {
+        return state.messages.sendDynamicPhoto(
+          senderId: senderId,
+          receiverId: receiverId,
+          coverId: coverId,
+          videoId: videoId,
+        );
+      },
+      uploadFileFromPath: ({
+        required String filePath,
+        int? userId,
+      }) {
+        return state.attachments.uploadNormalFromPath(
+          filePath: filePath,
+          userId: userId,
+        );
+      },
+      clearConversation: ({
+        required int userId,
+        required int peerId,
+      }) {
+        return state.messages.clearConversation(
+          userId: userId,
+          peerId: peerId,
+        );
+      },
+    );
+  }
+
   MessageSender _messageSender(AppState state, int senderId) {
     return MessageSender(
-      appState: state,
+      workflow: _workflow(state),
       peerId: widget.peerId,
       senderId: senderId,
-      localMessageFactory: ChatLocalMessageFactory(
+      localMessageFactory: LocalMessageFactory(
         senderId: senderId,
         receiverId: widget.peerId,
       ),
@@ -246,6 +316,30 @@ class _ChatScreenState extends State<ChatScreen> {
     return _chatMediaNavigator ??= ChatMediaNavigator(context);
   }
 
+  ChatMediaActionHandler _mediaActionHandler(
+    AppState state,
+    int currentUserId,
+  ) {
+    return ChatMediaActionHandler(
+      context: context,
+      workflow: _workflow(state),
+      peerId: widget.peerId,
+      currentUserId: currentUserId,
+      dynamicPhotoAdapter: _dynamicPhotoAdapter,
+      messageSender: _messageSender(state, currentUserId),
+      sending: _sending,
+      onConversationCleared: () {
+        if (!mounted) return;
+        setState(() {
+          _messages.clear();
+          _localCoverBytesByMessageId.clear();
+          _localCoverPathByMessageId.clear();
+        });
+      },
+      showSnack: _showSnack,
+    );
+  }
+
   void _insertLocalMessage(
     ChatMessage message, {
     Uint8List? localCoverBytes,
@@ -265,12 +359,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _replaceMessage(int tempId, ChatMessage message) {
-    final idx = _messages.indexWhere((e) => e.id == tempId);
-    if (idx < 0) return;
+    final index = _messages.indexWhere((item) => item.id == tempId);
+    if (index < 0) return;
     final localBytes = _localCoverBytesByMessageId.remove(tempId);
     final localPath = _localCoverPathByMessageId.remove(tempId);
     setState(() {
-      _messages[idx] = message;
+      _messages[index] = message;
       _messages.sort(_conversationCoordinator.compareMessages);
       if (localBytes != null) {
         _localCoverBytesByMessageId[message.id] = localBytes;
@@ -283,7 +377,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _removeLocalMessage(int tempId) {
     setState(() {
-      _messages.removeWhere((e) => e.id == tempId);
+      _messages.removeWhere((item) => item.id == tempId);
       _localCoverBytesByMessageId.remove(tempId);
       _localCoverPathByMessageId.remove(tempId);
     });
@@ -307,6 +401,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final hasRemoteImage = message.resolvedCoverUrl?.trim().isNotEmpty == true;
     final hasRemoteVideo = message.resolvedPlayUrl?.trim().isNotEmpty == true;
     final type = message.type.toUpperCase();
+
     if (type == 'IMAGE' && hasRemoteImage) {
       _localCoverBytesByMessageId.remove(message.id);
       _localCoverPathByMessageId.remove(message.id);
@@ -327,168 +422,48 @@ class _ChatScreenState extends State<ChatScreen> {
     final state = context.read<AppState>();
     final session = state.session;
     if (session == null) return;
+
     await _messageSender(state, session.userId).sendText(
       text: text,
-      onQueued: () {
-        _textCtrl.clear();
-      },
+      onQueued: _textCtrl.clear,
       onFailedRestore: (failedText) {
         _textCtrl.text = failedText;
       },
     );
   }
 
-  Future<void> _sendImageFromPath({
-    required String filePath,
-    Uint8List? previewBytes,
-    MediaDraftMetadata? metadata,
-  }) async {
+  Future<void> _showAttachMenu() async {
     final state = context.read<AppState>();
     final session = state.session;
-    if (_sending || session == null) return;
-    await _messageSender(state, session.userId).sendImageFromPath(
-      filePath: filePath,
-      previewBytes: previewBytes,
-      metadata: metadata,
-    );
-  }
-
-  Future<void> _sendVideoFromPath({
-    required String filePath,
-    Uint8List? previewBytes,
-    MediaDraftMetadata? metadata,
-  }) async {
-    final state = context.read<AppState>();
-    final session = state.session;
-    if (_sending || session == null) return;
-    await _messageSender(state, session.userId).sendVideoFromPath(
-      filePath: filePath,
-      previewBytes: previewBytes,
-      metadata: metadata,
-    );
-  }
-
-  Future<void> _sendDynamicPhoto({
-    required String coverPath,
-    Uint8List? previewBytes,
-    required Future<FileUploadResponse> Function(int userId) upload,
-    MediaDraftMetadata? metadata,
-  }) async {
-    final state = context.read<AppState>();
-    final session = state.session;
-    if (_sending || session == null) return;
-    await _messageSender(state, session.userId).sendDynamicPhoto(
-      coverPath: coverPath,
-      previewBytes: previewBytes,
-      upload: upload,
-      metadata: metadata,
-    );
-  }
-
-  Future<void> _pickGalleryImage() async {
-    final asset = await ChatMediaPicker.pickAsset(
-      context: context,
-      mode: ChatAssetPickerMode.image,
-      showSnack: _showSnack,
-    );
-    if (asset == null) return;
-    final file = await asset.originFile ?? await asset.file;
-    if (file == null) {
-      _showSnack('无法读取所选图片。');
-      return;
-    }
-
-    final previewBytes = await asset.thumbnailDataWithSize(
-      const ThumbnailSize(512, 512),
-    );
-
-    await _sendImageFromPath(
-      filePath: file.path,
-      previewBytes: previewBytes,
-      metadata: MediaDraftMetadata(
-        width: asset.width,
-        height: asset.height,
-      ),
-    );
-  }
-
-  Future<void> _pickGalleryVideo() async {
-    final asset = await ChatMediaPicker.pickAsset(
-      context: context,
-      mode: ChatAssetPickerMode.video,
-      showSnack: _showSnack,
-    );
-    if (asset == null) return;
-    final file = await asset.originFile ?? await asset.file;
-    if (file == null) {
-      _showSnack('无法读取所选视频。');
-      return;
-    }
-    final previewBytes = await asset.thumbnailDataWithSize(
-      const ThumbnailSize(512, 512),
-    );
-    await _sendVideoFromPath(
-      filePath: file.path,
-      previewBytes: previewBytes,
-      metadata: MediaDraftMetadata(
-        width: asset.width,
-        height: asset.height,
-        durationSeconds: asset.duration.toDouble(),
-      ),
-    );
-  }
-
-  Future<void> _pickGalleryLivePhoto() async {
-    final appState = context.read<AppState>();
-    final asset = await ChatMediaPicker.pickAsset(
-      context: context,
-      mode: ChatAssetPickerMode.livePhoto,
-      showSnack: _showSnack,
-    );
-    if (asset == null) return;
-
-    final previewBytes = await asset.thumbnailDataWithSize(
-      const ThumbnailSize(512, 512),
-    );
-
-    final picked = await _dynamicPhotoAdapter.detect(asset);
-    if (picked == null) {
-      _showSnack('无法读取所选实况图片。');
-      return;
-    }
-    final uploader = DynamicMediaUploadService(appState.files);
-    await _sendDynamicPhoto(
-      coverPath: picked.coverPath,
-      previewBytes: previewBytes,
-      upload: (userId) => uploader.upload(pickResult: picked, userId: userId),
-      metadata: MediaDraftMetadata(
-        width: asset.width,
-        height: asset.height,
-        durationSeconds: asset.duration.toDouble(),
-      ),
-    );
+    if (session == null) return;
+    await _mediaActionHandler(state, session.userId).showAttachMenu();
   }
 
   Future<void> _handleChatAction(_ChatAction action) async {
+    final state = context.read<AppState>();
+    final session = state.session;
+    if (session == null) return;
+    final handler = _mediaActionHandler(state, session.userId);
     switch (action) {
       case _ChatAction.clearConversation:
-        await _clearConversation();
+        await handler.clearConversation();
         break;
       case _ChatAction.clearCache:
-        await _clearMediaCache();
+        await handler.clearMediaCache();
         break;
     }
   }
 
   Future<void> _showChatActionsSheet() async {
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox?;
-    final button =
-        _moreButtonKey.currentContext?.findRenderObject() as RenderBox?;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
+    final button = _moreButtonKey.currentContext?.findRenderObject() as RenderBox?;
     if (overlay == null || button == null) return;
+
     final topLeft = button.localToGlobal(Offset.zero, ancestor: overlay);
-    final bottomRight =
-        button.localToGlobal(button.size.bottomRight(Offset.zero), ancestor: overlay);
+    final bottomRight = button.localToGlobal(
+      button.size.bottomRight(Offset.zero),
+      ancestor: overlay,
+    );
     final action = await showMenu<_ChatAction>(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -512,87 +487,13 @@ class _ChatScreenState extends State<ChatScreen> {
           value: _ChatAction.clearCache,
           child: _MenuActionRow(
             icon: Icons.cleaning_services_outlined,
-            label: '清除缓存',
+            label: '清除媒体缓存',
           ),
         ),
       ],
     );
     if (action != null) {
       await _handleChatAction(action);
-    }
-  }
-
-  Future<void> _clearConversation() async {
-    final state = context.read<AppState>();
-    final session = state.session;
-    if (session == null) return;
-
-    final confirmed = await showDialog<bool>(
-          context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('清空聊天记录？'),
-            content: const Text(
-              '这会清空当前单聊的服务器聊天记录。',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('清空'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-    if (!confirmed) return;
-
-    try {
-      await state.messages.clearConversation(
-        userId: session.userId,
-        peerId: widget.peerId,
-      );
-      if (!mounted) return;
-      setState(() {
-        _messages.clear();
-        _localCoverBytesByMessageId.clear();
-        _localCoverPathByMessageId.clear();
-      });
-      _showSnack('聊天记录已清空');
-    } catch (e) {
-      _showSnack(_toUserError(e));
-    }
-  }
-
-  Future<void> _clearMediaCache() async {
-    try {
-      await MediaDownloader.clearCache();
-      await DefaultCacheManager().emptyCache();
-      imageCache.clear();
-      imageCache.clearLiveImages();
-      _showSnack('缓存已清除');
-    } catch (e) {
-      _showSnack(_toUserError(e));
-    }
-  }
-
-  Future<void> _showAttachMenu() async {
-    final action = await ChatMediaPicker.showAttachMenu(context);
-
-    switch (action) {
-      case ChatAttachAction.galleryImage:
-        await _pickGalleryImage();
-        break;
-      case ChatAttachAction.galleryVideo:
-        await _pickGalleryVideo();
-        break;
-      case ChatAttachAction.livePhoto:
-        await _pickGalleryLivePhoto();
-        break;
-      case null:
-        break;
     }
   }
 
@@ -606,6 +507,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final myAvatarUrl = session == null ? null : state.avatarUrlFor(myId);
     final peerAvatarUrl = state.avatarUrlFor(widget.peerId);
     final mediaNavigator = _mediaNavigator();
+    final urlResolver = MediaUrlResolver(state.apiBaseUrl);
 
     return Scaffold(
       appBar: AppBar(
@@ -623,10 +525,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             const SizedBox(width: 10),
             Flexible(
-              child: Text(
-                peerName,
-                overflow: TextOverflow.ellipsis,
-              ),
+              child: Text(peerName, overflow: TextOverflow.ellipsis),
             ),
           ],
         ),
@@ -683,6 +582,7 @@ class _ChatScreenState extends State<ChatScreen> {
               onOpenDynamicPhoto: mediaNavigator.openDynamicPhoto,
               localCoverBytesByMessageId: _localCoverBytesByMessageId,
               localCoverPathByMessageId: _localCoverPathByMessageId,
+              urlResolver: urlResolver,
             ),
           ),
           ChatComposer(
@@ -703,54 +603,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 
-enum _ChatAction {
-  clearConversation,
-  clearCache,
-}
+enum _ChatAction { clearConversation, clearCache }
 
 const List<String> _emojiSet = <String>[
-  '😀',
-  '😁',
-  '😂',
-  '🤣',
-  '😊',
-  '😍',
-  '😘',
-  '😜',
-  '😎',
-  '🤔',
-  '😴',
-  '😅',
-  '🤗',
-  '😭',
-  '😡',
-  '🥳',
-  '👍',
-  '👌',
-  '✌',
-  '👏',
-  '🙏',
-  '🎉',
-  '❤',
-  '💕',
-  '💯',
-  '🔥',
-  '🌹',
-  '🍀',
-  '☕',
-  '🍉',
-  '🎂',
-  '🐶',
-  '🐱',
-  '🌙',
-  '⭐',
+  '😀','😁','😂','😅','😉','😍','😘','🤔','😎','😭','😡','😴','🥳','😇','🤗','🙌','👏','👍','✌️','🔥','🎉','❤️','💡','🌈','🍀','☕','🎧','📷','🚀','🌙','⭐','🐶','🐱','🦊','🫶',
 ];
 
 class _MenuActionRow extends StatelessWidget {
-  const _MenuActionRow({
-    required this.icon,
-    required this.label,
-  });
+  const _MenuActionRow({required this.icon, required this.label});
 
   final IconData icon;
   final String label;
@@ -766,3 +626,4 @@ class _MenuActionRow extends StatelessWidget {
     );
   }
 }
+
