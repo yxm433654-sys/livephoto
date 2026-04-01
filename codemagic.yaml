@@ -4,8 +4,8 @@ workflows:
     instance_type: mac_mini_m1
     max_build_duration: 60
     environment:
-      flutter: 3.19.5 # 这里建议改为你具体的版本号，如 3.22.0
-      xcode: latest   # 建议改为 15.4 或 16.0 等具体版本
+      flutter: 3.19.5 
+      xcode: latest   
     scripts:
       - name: Get Flutter packages
         script: flutter pub get
@@ -28,4 +28,4 @@ workflows:
     publishing:
       email:
         recipients:
-          - your-email@example.com # 接收通知的邮箱
+          - your-email@example.com 

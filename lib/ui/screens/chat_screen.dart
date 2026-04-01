@@ -1,9 +1,11 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:typed_data';
+
+import 'package:dynamic_photo_chat_flutter/application/message/chat_conversation_coordinator.dart';
 import 'package:dynamic_photo_chat_flutter/models/file_upload_response.dart';
 import 'package:dynamic_photo_chat_flutter/models/media_draft_metadata.dart';
 import 'package:dynamic_photo_chat_flutter/models/message.dart';
-import 'package:dynamic_photo_chat_flutter/services/dynamic_media_detector.dart';
+import 'package:dynamic_photo_chat_flutter/platform/dynamic/dynamic_photo_adapter.dart';
 import 'package:dynamic_photo_chat_flutter/services/dynamic_media_upload_service.dart';
 import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
 import 'package:dynamic_photo_chat_flutter/ui/chat/chat_composer.dart';
@@ -34,12 +36,14 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollCtrl = ScrollController();
   final FocusNode _textFocusNode = FocusNode();
   final GlobalKey _moreButtonKey = GlobalKey();
+  final ChatConversationCoordinator _conversationCoordinator =
+      const ChatConversationCoordinator();
 
   final List<ChatMessage> _messages = <ChatMessage>[];
   final Map<int, Uint8List> _localCoverBytesByMessageId = <int, Uint8List>{};
   final Map<int, String> _localCoverPathByMessageId = <int, String>{};
   ChatMediaNavigator? _chatMediaNavigator;
-  final DynamicMediaDetector _dynamicMediaDetector = const DynamicMediaDetector();
+  final DynamicPhotoAdapter _dynamicPhotoAdapter = const DynamicPhotoAdapter();
 
   StreamSubscription<ChatMessage>? _msgSub;
   bool _loading = true;
@@ -86,34 +90,22 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    try {
-      state.prefetchUser(widget.peerId);
-      final history = await state.messages.history(
-        userId: session.userId,
-        peerId: widget.peerId,
-        page: 0,
-        size: 100,
-      );
-      history.sort(_compareMessages);
+    final conversationState = await _conversationCoordinator.initialize(
+      appState: state,
+      currentUserId: session.userId,
+      peerId: widget.peerId,
+    );
 
-      _messages
-        ..clear()
-        ..sort(_compareMessages)
-        ..addAll(history);
-      _lastMessageId = _messages.isEmpty
-          ? 0
-          : _messages.map((e) => e.id).reduce((a, b) => a > b ? a : b);
+    _messages
+      ..clear()
+      ..addAll(conversationState.messages);
+    _lastMessageId = conversationState.lastMessageId;
+    _error = conversationState.errorMessage;
+    _subscribeToEvents(state, session.userId);
 
-      await _markAllRead(session.userId);
-      state.clearUnread(widget.peerId);
-      _subscribeToEvents(state, session.userId);
-    } catch (e) {
-      _error = _toUserError(e);
-    } finally {
-      if (mounted) {
-        setState(() => _loading = false);
-        _scrollToBottom(animated: false);
-      }
+    if (mounted) {
+      setState(() => _loading = false);
+      _scrollToBottom(animated: false);
     }
   }
 
@@ -121,78 +113,52 @@ class _ChatScreenState extends State<ChatScreen> {
     _msgSub?.cancel();
     _msgSub = state.messageEvents.listen((message) async {
       if (!mounted) return;
-      if (!_isInThisChat(message, myId)) return;
 
-      if (message.id > _lastMessageId) {
-        _lastMessageId = message.id;
-      }
+      final pendingIdBefore = _findPendingIdForIncoming(message, myId);
+      final update = await _conversationCoordinator.applyIncomingMessage(
+        appState: state,
+        currentMessages: _messages,
+        incomingMessage: message,
+        currentUserId: myId,
+        peerId: widget.peerId,
+        userAtBottom: _userAtBottom,
+      );
+      if (update == null) return;
 
-      final idx = _messages.indexWhere((e) => e.id == message.id);
-      final pendingIdx = idx < 0 ? _findPendingLocalIndex(message, myId) : -1;
       setState(() {
-        if (idx >= 0) {
-          _messages[idx] = message;
-        } else if (pendingIdx >= 0) {
-          final pendingId = _messages[pendingIdx].id;
-          _messages[pendingIdx] = message;
-          final localBytes = _localCoverBytesByMessageId.remove(pendingId);
-          final localPath = _localCoverPathByMessageId.remove(pendingId);
+        _messages
+          ..clear()
+          ..addAll(update.messages);
+        if (pendingIdBefore != null) {
+          final localBytes = _localCoverBytesByMessageId.remove(pendingIdBefore);
+          final localPath = _localCoverPathByMessageId.remove(pendingIdBefore);
           if (localBytes != null) {
             _localCoverBytesByMessageId[message.id] = localBytes;
           }
           if (localPath != null) {
             _localCoverPathByMessageId[message.id] = localPath;
           }
-        } else {
-          _messages.add(message);
         }
-        _messages.sort(_compareMessages);
+        if (update.lastMessageId > _lastMessageId) {
+          _lastMessageId = update.lastMessageId;
+        }
         _dropLocalPreviewIfRemoteReady(message);
       });
 
-      if (message.receiverId == myId) {
-        await _markMessageRead(message, myId);
-        state.clearUnread(widget.peerId);
-      }
-
-      if (_userAtBottom || message.senderId == myId) {
+      if (update.shouldScrollToBottom) {
         _scrollToBottom();
       }
     });
   }
 
-  int _findPendingLocalIndex(ChatMessage message, int myId) {
-    if (message.senderId != myId) return -1;
-    return _messages.indexWhere(
-      (candidate) =>
-          candidate.id < 0 &&
-          candidate.senderId == myId &&
-          candidate.receiverId == widget.peerId &&
-          candidate.type == message.type &&
-          (candidate.status ?? '').toUpperCase() == 'SENDING',
+  int? _findPendingIdForIncoming(ChatMessage message, int myId) {
+    final index = _conversationCoordinator.findPendingLocalIndex(
+      _messages,
+      message,
+      myId,
+      widget.peerId,
     );
-  }
-
-  bool _isInThisChat(ChatMessage message, int myId) {
-    final fromPeer =
-        message.senderId == widget.peerId && message.receiverId == myId;
-    final fromMe =
-        message.senderId == myId && message.receiverId == widget.peerId;
-    return fromPeer || fromMe;
-  }
-
-  Future<void> _markAllRead(int myId) async {
-    for (final message in _messages) {
-      await _markMessageRead(message, myId);
-    }
-  }
-
-  Future<void> _markMessageRead(ChatMessage message, int myId) async {
-    if (message.receiverId != myId) return;
-    if ((message.status ?? '').toUpperCase() == 'READ') return;
-    try {
-      await context.read<AppState>().messages.markRead(message.id);
-    } catch (_) {}
+    return index >= 0 ? _messages[index].id : null;
   }
 
   void _scrollToBottom({bool animated = true}) {
@@ -250,8 +216,8 @@ class _ChatScreenState extends State<ChatScreen> {
     return id;
   }
 
-  ChatMediaSender _mediaSender(AppState state, int senderId) {
-    return ChatMediaSender(
+  MessageSender _messageSender(AppState state, int senderId) {
+    return MessageSender(
       appState: state,
       peerId: widget.peerId,
       senderId: senderId,
@@ -287,7 +253,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }) {
     setState(() {
       _messages.add(message);
-      _messages.sort(_compareMessages);
+      _messages.sort(_conversationCoordinator.compareMessages);
       if (localCoverBytes != null) {
         _localCoverBytesByMessageId[message.id] = localCoverBytes;
       }
@@ -305,7 +271,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final localPath = _localCoverPathByMessageId.remove(tempId);
     setState(() {
       _messages[idx] = message;
-      _messages.sort(_compareMessages);
+      _messages.sort(_conversationCoordinator.compareMessages);
       if (localBytes != null) {
         _localCoverBytesByMessageId[message.id] = localBytes;
       }
@@ -321,20 +287,6 @@ class _ChatScreenState extends State<ChatScreen> {
       _localCoverBytesByMessageId.remove(tempId);
       _localCoverPathByMessageId.remove(tempId);
     });
-  }
-
-  int _compareMessages(ChatMessage a, ChatMessage b) {
-    final aTime = a.createdAt?.millisecondsSinceEpoch ?? 0;
-    final bTime = b.createdAt?.millisecondsSinceEpoch ?? 0;
-    if (aTime != bTime) {
-      return aTime.compareTo(bTime);
-    }
-    final aTemp = a.id < 0;
-    final bTemp = b.id < 0;
-    if (aTemp != bTemp) {
-      return aTemp ? 1 : -1;
-    }
-    return a.id.compareTo(b.id);
   }
 
   bool _shouldShowTimestamp(int index) {
@@ -359,7 +311,9 @@ class _ChatScreenState extends State<ChatScreen> {
       _localCoverBytesByMessageId.remove(message.id);
       _localCoverPathByMessageId.remove(message.id);
     }
-    if ((type == 'VIDEO' || type == 'DYNAMIC_PHOTO') && hasRemoteCover && hasRemoteVideo) {
+    if ((type == 'VIDEO' || type == 'DYNAMIC_PHOTO') &&
+        hasRemoteCover &&
+        hasRemoteVideo) {
       _localCoverBytesByMessageId.remove(message.id);
       _localCoverPathByMessageId.remove(message.id);
     }
@@ -373,54 +327,15 @@ class _ChatScreenState extends State<ChatScreen> {
     final state = context.read<AppState>();
     final session = state.session;
     if (session == null) return;
-
-    final tempId = _nextTempId();
-    final tempMessage = ChatLocalMessageFactory(
-      senderId: session.userId,
-      receiverId: widget.peerId,
-    ).build(
-      id: tempId,
-      type: 'TEXT',
-      content: text,
-      status: 'SENDING',
+    await _messageSender(state, session.userId).sendText(
+      text: text,
+      onQueued: () {
+        _textCtrl.clear();
+      },
+      onFailedRestore: (failedText) {
+        _textCtrl.text = failedText;
+      },
     );
-
-    _textCtrl.clear();
-    _insertLocalMessage(tempMessage);
-
-    setState(() {
-      _sending = true;
-      _error = null;
-    });
-
-    try {
-      final messageId = await state.messages.sendText(
-        senderId: session.userId,
-        receiverId: widget.peerId,
-        content: text,
-      );
-      final localMessageFactory = ChatLocalMessageFactory(
-        senderId: session.userId,
-        receiverId: widget.peerId,
-      );
-      _replaceMessage(
-        tempId,
-        localMessageFactory.build(
-          id: messageId,
-          type: 'TEXT',
-          content: text,
-          status: 'SENT',
-        ),
-      );
-    } catch (e) {
-      _removeLocalMessage(tempId);
-      _textCtrl.text = text;
-      _showSnack(_toUserError(e));
-    } finally {
-      if (mounted) {
-        setState(() => _sending = false);
-      }
-    }
   }
 
   Future<void> _sendImageFromPath({
@@ -431,7 +346,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final state = context.read<AppState>();
     final session = state.session;
     if (_sending || session == null) return;
-    await _mediaSender(state, session.userId).sendImageFromPath(
+    await _messageSender(state, session.userId).sendImageFromPath(
       filePath: filePath,
       previewBytes: previewBytes,
       metadata: metadata,
@@ -446,7 +361,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final state = context.read<AppState>();
     final session = state.session;
     if (_sending || session == null) return;
-    await _mediaSender(state, session.userId).sendVideoFromPath(
+    await _messageSender(state, session.userId).sendVideoFromPath(
       filePath: filePath,
       previewBytes: previewBytes,
       metadata: metadata,
@@ -462,7 +377,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final state = context.read<AppState>();
     final session = state.session;
     if (_sending || session == null) return;
-    await _mediaSender(state, session.userId).sendDynamicPhoto(
+    await _messageSender(state, session.userId).sendDynamicPhoto(
       coverPath: coverPath,
       previewBytes: previewBytes,
       upload: upload,
@@ -536,7 +451,7 @@ class _ChatScreenState extends State<ChatScreen> {
       const ThumbnailSize(512, 512),
     );
 
-    final picked = await _dynamicMediaDetector.detect(asset);
+    final picked = await _dynamicPhotoAdapter.detect(asset);
     if (picked == null) {
       _showSnack('无法读取所选实况图片。');
       return;
@@ -741,7 +656,10 @@ class _ChatScreenState extends State<ChatScreen> {
               actions: [
                 TextButton(
                   onPressed: () {
-                    setState(() => _error = null);
+                    setState(() {
+                      _error = null;
+                      _loading = true;
+                    });
                     _init();
                   },
                   child: const Text('重试'),

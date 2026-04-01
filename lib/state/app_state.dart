@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dynamic_photo_chat_flutter/models/chat_session_summary.dart';
 import 'package:dynamic_photo_chat_flutter/models/message.dart';
 import 'package:dynamic_photo_chat_flutter/models/session.dart';
 import 'package:dynamic_photo_chat_flutter/models/user.dart';
@@ -11,6 +12,7 @@ import 'package:dynamic_photo_chat_flutter/services/auth_service.dart';
 import 'package:dynamic_photo_chat_flutter/services/file_service.dart';
 import 'package:dynamic_photo_chat_flutter/services/message_service.dart';
 import 'package:dynamic_photo_chat_flutter/services/realtime_service.dart';
+import 'package:dynamic_photo_chat_flutter/services/session_service.dart';
 import 'package:dynamic_photo_chat_flutter/services/server_config_store.dart';
 import 'package:dynamic_photo_chat_flutter/utils/user_error_message.dart';
 import 'package:flutter/foundation.dart';
@@ -30,11 +32,13 @@ class AppState extends ChangeNotifier {
   late ApiClient api;
   late AuthService auth;
   late MessageService messages;
+  late SessionService sessions;
   late FileService files;
 
   SharedPreferences? _prefs;
   Session? session;
   List<int> peers = <int>[];
+  List<ChatSessionSummary> conversationSummaries = <ChatSessionSummary>[];
   late String apiBaseUrl;
   late String wsBaseUrl;
   final ServerConfigStore _serverConfigStore = ServerConfigStore();
@@ -51,6 +55,31 @@ class AppState extends ChangeNotifier {
   String? connectionNotice;
 
   int unreadCount(int peerId) => _unreadByPeer[peerId] ?? 0;
+
+  List<int> orderedPeerIds() {
+    final ordered = <int>[];
+    final seen = <int>{};
+    for (final item in conversationSummaries) {
+      if (seen.add(item.peerId)) {
+        ordered.add(item.peerId);
+      }
+    }
+    for (final peerId in peers) {
+      if (seen.add(peerId)) {
+        ordered.add(peerId);
+      }
+    }
+    return ordered;
+  }
+
+  ChatSessionSummary? sessionSummaryFor(int peerId) {
+    for (final item in conversationSummaries) {
+      if (item.peerId == peerId) {
+        return item;
+      }
+    }
+    return null;
+  }
 
   String displayNameFor(int userId) {
     final cached = _userCache[userId];
@@ -139,6 +168,7 @@ class AppState extends ChangeNotifier {
 
     await _restoreSessionScopedState();
     if (session != null) {
+      await refreshSessions(notify: false);
       _startRealtime();
     }
     notifyListeners();
@@ -159,6 +189,7 @@ class AppState extends ChangeNotifier {
     this.wsBaseUrl = endpoints.wsBaseUrl;
     _buildServices();
     if (session != null) {
+      await refreshSessions(notify: false);
       _startRealtime();
     }
     notifyListeners();
@@ -170,6 +201,7 @@ class AppState extends ChangeNotifier {
     session = nextSession;
     await _prefs?.setString(_sessionKey, jsonEncode(nextSession.toJson()));
     await _restoreSessionScopedState();
+    await refreshSessions(notify: false);
     _startRealtime();
     notifyListeners();
   }
@@ -191,6 +223,7 @@ class AppState extends ChangeNotifier {
     _stopRealtime();
     session = null;
     peers = <int>[];
+    conversationSummaries = <ChatSessionSummary>[];
     _lastMessageId = 0;
     connectionNotice = null;
     await _prefs?.remove(_sessionKey);
@@ -213,8 +246,46 @@ class AppState extends ChangeNotifier {
     if (!peers.contains(peerId)) return;
     peers = peers.where((e) => e != peerId).toList();
     await _savePeers();
+    conversationSummaries =
+        conversationSummaries.where((e) => e.peerId != peerId).toList();
     _unreadByPeer.remove(peerId);
     notifyListeners();
+  }
+
+  Future<void> refreshSessions({bool notify = true}) async {
+    final currentSession = session;
+    if (currentSession == null) {
+      conversationSummaries = <ChatSessionSummary>[];
+      if (notify) {
+        notifyListeners();
+      }
+      return;
+    }
+
+    try {
+      final items = await sessions.list(userId: currentSession.userId);
+      conversationSummaries = items;
+      for (final item in items) {
+        _unreadByPeer[item.peerId] = item.unreadCount;
+        final username = item.peerUsername?.trim();
+        if (username != null && username.isNotEmpty) {
+          final cached = _userCache[item.peerId];
+          _userCache[item.peerId] = UserProfile(
+            userId: item.peerId,
+            username: username,
+            avatarUrl: item.peerAvatarUrl ?? cached?.avatarUrl,
+            status: cached?.status,
+            createdAt: cached?.createdAt,
+          );
+        }
+      }
+    } catch (_) {
+      // Keep local peer list as a fallback if session sync fails.
+    }
+
+    if (notify) {
+      notifyListeners();
+    }
   }
 
   void _startRealtime() {
@@ -248,6 +319,9 @@ class AppState extends ChangeNotifier {
           }
         }
       },
+      onSessionChanged: () {
+        refreshSessions();
+      },
       onError: (_) {
         final nextNotice = UserErrorMessage.from(
           const HttpException('connection closed before full header was received'),
@@ -278,10 +352,12 @@ class AppState extends ChangeNotifier {
     api = ApiClient(baseUrl: apiBaseUrl);
     auth = AuthService(api);
     messages = MessageService(api);
+    sessions = SessionService(api);
     files = FileService(baseUrl: apiBaseUrl);
   }
   Future<void> _restoreSessionScopedState() async {
     peers = <int>[];
+    conversationSummaries = <ChatSessionSummary>[];
     _lastMessageId = 0;
     _unreadByPeer.clear();
     final peerRaw = _prefs?.getStringList(_scopedKey(_peersKey));

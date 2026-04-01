@@ -22,6 +22,7 @@ class RealtimeService {
     required String token,
     required int lastMessageId,
     required void Function(ChatMessage message) onMessage,
+    required void Function() onSessionChanged,
     required void Function(Object error) onError,
   }) {
     stop();
@@ -45,6 +46,9 @@ class RealtimeService {
                 _lastMessageId = msg.id;
               }
               onMessage(msg);
+            } else if (type == 'SESSION_UPDATED' ||
+                type == 'SESSION_LIST_CHANGED') {
+              onSessionChanged();
             }
           } catch (e) {
             onError(e);

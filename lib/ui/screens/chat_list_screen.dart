@@ -1,3 +1,5 @@
+import 'package:dynamic_photo_chat_flutter/application/session/session_list_coordinator.dart';
+import 'package:dynamic_photo_chat_flutter/application/session/session_list_item_view_data.dart';
 import 'package:dynamic_photo_chat_flutter/models/user.dart';
 import 'package:dynamic_photo_chat_flutter/state/app_state.dart';
 import 'package:dynamic_photo_chat_flutter/ui/chat/add_conversation_dialog.dart';
@@ -15,6 +17,8 @@ class ChatListScreen extends StatefulWidget {
 
 class _ChatListScreenState extends State<ChatListScreen> {
   final GlobalKey _menuButtonKey = GlobalKey();
+  final SessionListCoordinator _sessionListCoordinator =
+      const SessionListCoordinator();
 
   Future<void> _addConversation() async {
     final selectedUser = await showDialog<UserProfile>(
@@ -122,6 +126,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    final sessionItems = _sessionListCoordinator.buildItems(state);
     final session = state.session;
     final username = session?.username ?? '游客';
     final userId = session?.userId ?? 0;
@@ -198,18 +203,16 @@ class _ChatListScreenState extends State<ChatListScreen> {
               ],
             ),
           Expanded(
-            child: state.peers.isEmpty
+            child: sessionItems.isEmpty
                 ? const _EmptyConversationState()
                 : ListView.separated(
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                    itemCount: state.peers.length,
+                    itemCount: sessionItems.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (context, index) {
-                      final peerId = state.peers[index];
+                      final SessionListItemViewData item = sessionItems[index];
+                      final peerId = item.peerId;
                       state.prefetchUser(peerId);
-                      final unread = state.unreadCount(peerId);
-                      final peerName = state.displayNameFor(peerId);
-                      final peerAvatarUrl = state.avatarUrlFor(peerId);
 
                       return Dismissible(
                         key: ValueKey('peer-$peerId'),
@@ -226,11 +229,12 @@ class _ChatListScreenState extends State<ChatListScreen> {
                           child: const Icon(Icons.delete_outline, color: Colors.white),
                         ),
                         child: ConversationListItem(
-                          name: peerName,
-                          avatarLabel: _avatarText(peerName, peerId),
+                          name: item.name,
+                          avatarLabel: _avatarText(item.name, peerId),
                           avatarColor: _avatarColor(peerId),
-                          avatarUrl: peerAvatarUrl,
-                          unreadCount: unread,
+                          avatarUrl: item.avatarUrl,
+                          unreadCount: item.unreadCount,
+                          subtitle: item.subtitle,
                           onTap: () {
                             state.clearUnread(peerId);
                             Navigator.of(context).push(
@@ -305,7 +309,7 @@ class _EmptyConversationState extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             const Text(
-              '点击右上角三个点，搜索用户名后添加会话。',
+              '点击右上角菜单，搜索用户名后添加会话。',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Color(0xFF6B7280),

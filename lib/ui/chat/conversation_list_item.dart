@@ -9,6 +9,7 @@ class ConversationListItem extends StatelessWidget {
     required this.unreadCount,
     required this.onTap,
     this.avatarUrl,
+    this.subtitle,
   });
 
   final String name;
@@ -17,10 +18,12 @@ class ConversationListItem extends StatelessWidget {
   final int unreadCount;
   final VoidCallback onTap;
   final String? avatarUrl;
+  final String? subtitle;
 
   @override
   Widget build(BuildContext context) {
-    final subtitle = unreadCount > 0 ? '$unreadCount 条未读消息' : '点击进入聊天';
+    final resolvedSubtitle =
+        subtitle ?? (unreadCount > 0 ? '$unreadCount 条未读消息' : '点击进入聊天');
 
     return Material(
       color: Colors.white,
@@ -54,7 +57,7 @@ class ConversationListItem extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      subtitle,
+                      resolvedSubtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
