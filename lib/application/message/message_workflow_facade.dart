@@ -8,6 +8,7 @@ class MessageWorkflowFacade {
     required this.attachmentService,
     required this.prefetchPeer,
     required this.clearUnread,
+    required this.refreshSessions,
     required this.loadHistory,
     required this.markRead,
     required this.sendText,
@@ -22,6 +23,7 @@ class MessageWorkflowFacade {
   final AttachmentService attachmentService;
   final Future<void> Function(int peerId) prefetchPeer;
   final void Function(int peerId) clearUnread;
+  final Future<void> Function() refreshSessions;
   final Future<List<ChatMessage>> Function({
     required int userId,
     required int peerId,

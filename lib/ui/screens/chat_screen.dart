@@ -107,6 +107,10 @@ class _ChatScreenState extends State<ChatScreen> {
     if (!mounted) return;
     setState(() => _loading = false);
     _scrollToBottom(animated: false);
+    Future<void>.delayed(const Duration(milliseconds: 80), () {
+      if (!mounted) return;
+      _scrollToBottom(animated: false);
+    });
   }
 
   void _subscribeToEvents(MessageWorkflowFacade workflow, int currentUserId) {
@@ -140,7 +144,9 @@ class _ChatScreenState extends State<ChatScreen> {
           _dropLocalPreviewIfRemoteReady(update.incomingMessage);
         });
         if (update.conversationUpdate.shouldScrollToBottom) {
-          _scrollToBottom();
+          _scrollToBottom(
+            animated: update.incomingMessage.senderId != currentUserId,
+          );
         }
       },
     );
@@ -200,9 +206,10 @@ class _ChatScreenState extends State<ChatScreen> {
   MessageWorkflowFacade _workflow(AppState state) {
     return _workflowFacade ??= MessageWorkflowFacade(
       messageEvents: state.messageEvents,
-      attachmentService: state.attachments,
       prefetchPeer: state.prefetchUser,
+      attachmentService: state.attachments,
       clearUnread: state.clearUnread,
+      refreshSessions: state.refreshSessions,
       loadHistory: ({
         required int userId,
         required int peerId,
@@ -355,7 +362,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _localCoverPathByMessageId[message.id] = localCoverPath;
       }
     });
-    _scrollToBottom();
+    _scrollToBottom(animated: false);
   }
 
   void _replaceMessage(int tempId, ChatMessage message) {
@@ -365,7 +372,6 @@ class _ChatScreenState extends State<ChatScreen> {
     final localPath = _localCoverPathByMessageId.remove(tempId);
     setState(() {
       _messages[index] = message;
-      _messages.sort(_conversationCoordinator.compareMessages);
       if (localBytes != null) {
         _localCoverBytesByMessageId[message.id] = localBytes;
       }
@@ -626,4 +632,7 @@ class _MenuActionRow extends StatelessWidget {
     );
   }
 }
+
+
+
 

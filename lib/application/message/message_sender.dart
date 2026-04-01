@@ -245,6 +245,9 @@ class MessageSender {
       } else {
         throw Exception('Unsupported send result');
       }
+      try {
+        await workflow.refreshSessions();
+      } catch (_) {}
     } catch (e) {
       removeLocalMessage(tempId);
       onError?.call();
@@ -386,5 +389,7 @@ class _ResolvedSend {
 
   final ChatMessage message;
 }
+
+
 
 

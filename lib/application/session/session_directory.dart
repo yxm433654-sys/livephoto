@@ -1,4 +1,4 @@
-import 'package:vox_flutter/models/chat_session_summary.dart';
+﻿import 'package:vox_flutter/models/chat_session_summary.dart';
 import 'package:vox_flutter/models/user.dart';
 
 class SessionDirectory {
@@ -75,8 +75,19 @@ class SessionDirectory {
   }
 
   void rememberSessionSummaries(List<ChatSessionSummary> items) {
-    conversationSummaries = items;
-    for (final item in items) {
+    final sortedItems = List<ChatSessionSummary>.from(items)
+      ..sort((a, b) {
+        final aTime = a.updatedAt?.millisecondsSinceEpoch ?? 0;
+        final bTime = b.updatedAt?.millisecondsSinceEpoch ?? 0;
+        if (aTime != bTime) {
+          return bTime.compareTo(aTime);
+        }
+        final aMessageId = a.lastMessageId ?? 0;
+        final bMessageId = b.lastMessageId ?? 0;
+        return bMessageId.compareTo(aMessageId);
+      });
+    conversationSummaries = sortedItems;
+    for (final item in sortedItems) {
       _unreadByPeer[item.peerId] = item.unreadCount;
       final username = item.peerUsername?.trim();
       if (username != null && username.isNotEmpty) {
@@ -129,3 +140,4 @@ class SessionDirectory {
     _userFetches.clear();
   }
 }
+

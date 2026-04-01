@@ -77,9 +77,8 @@ class ConversationFlow {
       nextMessages[pendingIndex] = incomingMessage;
     } else {
       nextMessages.add(incomingMessage);
+      nextMessages.sort(compareMessages);
     }
-
-    nextMessages.sort(compareMessages);
 
     if (incomingMessage.receiverId == currentUserId) {
       await markMessageRead(
@@ -167,3 +166,4 @@ class ConversationFlow {
     return a.id.compareTo(b.id);
   }
 }
+

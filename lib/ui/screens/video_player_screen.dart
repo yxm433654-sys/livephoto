@@ -1,6 +1,5 @@
 ﻿import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
-import 'package:vox_flutter/utils/media_downloader.dart';
 import 'package:vox_flutter/utils/media_saver.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
@@ -17,8 +16,6 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   VideoPlayerController? _controller;
   bool _loading = true;
   String? _error;
-  int _received = 0;
-  int? _total;
 
   @override
   void initState() {
@@ -26,28 +23,20 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _init();
   }
 
+  @override
+  void deactivate() {
+    _pausePlayback();
+    super.deactivate();
+  }
+
   Future<void> _init() async {
     try {
       setState(() {
         _loading = true;
         _error = null;
-        _received = 0;
-        _total = null;
       });
 
-      final downloaded = await MediaDownloader.downloadToCacheFile(
-        url: widget.url,
-        extensionHint: 'mp4',
-        onProgress: (received, total) {
-          if (!mounted) return;
-          setState(() {
-            _received = received;
-            _total = total;
-          });
-        },
-      );
-
-      final controller = VideoPlayerController.file(downloaded.file);
+      final controller = VideoPlayerController.networkUrl(Uri.parse(widget.url));
       await controller.initialize();
       await controller.setLooping(true);
       await controller.play();
@@ -61,17 +50,23 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
   }
 
+  void _pausePlayback() {
+    final controller = _controller;
+    controller?.pause();
+    controller?.setVolume(0);
+  }
+
   @override
   void dispose() {
-    _controller?.dispose();
+    _pausePlayback();
+    final controller = _controller;
+    _controller = null;
+    controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final progress = (_total == null || _total == 0)
-        ? null
-        : (_received / _total!).clamp(0.0, 1.0);
     final controller = _controller;
 
     return Scaffold(
@@ -81,6 +76,10 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           children: [
             _VideoDetailTopBar(
               title: widget.title ?? 'Video',
+              onBack: () {
+                _pausePlayback();
+                Navigator.of(context).pop();
+              },
               onSave: () async {
                 final messenger = ScaffoldMessenger.of(context);
                 try {
@@ -112,18 +111,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                         ),
                       )
                     : _loading || controller == null
-                        ? SizedBox(
+                        ? const SizedBox(
                             width: 220,
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                LinearProgressIndicator(value: progress),
-                                const SizedBox(height: 12),
+                                CircularProgressIndicator(),
+                                SizedBox(height: 12),
                                 Text(
-                                  progress == null
-                                      ? 'Loading video...'
-                                      : 'Loading video... ${(progress * 100).round()}%',
-                                  style: const TextStyle(color: Colors.white70),
+                                  'Preparing video stream...',
+                                  style: TextStyle(color: Colors.white70),
                                 ),
                               ],
                             ),
@@ -156,6 +153,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                                         if (controller.value.isPlaying) {
                                           await controller.pause();
                                         } else {
+                                          await controller.setVolume(1.0);
                                           await controller.play();
                                         }
                                         if (mounted) {
@@ -199,10 +197,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 class _VideoDetailTopBar extends StatelessWidget {
   const _VideoDetailTopBar({
     required this.title,
+    required this.onBack,
     required this.onSave,
   });
 
   final String title;
+  final VoidCallback onBack;
   final Future<void> Function() onSave;
 
   @override
@@ -212,7 +212,7 @@ class _VideoDetailTopBar extends StatelessWidget {
       child: Row(
         children: [
           IconButton(
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: onBack,
             icon: const Icon(Icons.arrow_back_ios_new_rounded),
             color: Colors.white,
           ),
@@ -237,7 +237,3 @@ class _VideoDetailTopBar extends StatelessWidget {
     );
   }
 }
-
-
-
-

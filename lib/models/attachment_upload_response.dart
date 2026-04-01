@@ -41,13 +41,13 @@
     double? toDouble(Object? v) => v is num ? v.toDouble() : null;
 
     return AttachmentUploadResponse(
-      fileId: toInt(json['fileId']),
+      fileId: toInt(json['fileId']) ?? toInt(json['id']),
       coverId: toInt(json['coverId']),
       videoId: toInt(json['videoId']),
       url: json['url']?.toString(),
       coverUrl: json['coverUrl']?.toString(),
       videoUrl: json['videoUrl']?.toString(),
-      fileType: json['fileType']?.toString(),
+      fileType: json['fileType']?.toString() ?? json['type']?.toString(),
       sourceType: json['sourceType']?.toString(),
       originalName: json['originalName']?.toString(),
       mimeType: json['mimeType']?.toString(),
@@ -60,3 +60,4 @@
     );
   }
 }
+

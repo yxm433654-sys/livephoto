@@ -43,10 +43,11 @@ class MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
-    final mediaWidth = math.min(mq.size.width * 0.48, 230.0);
-    final maxMediaHeight = math.min(mq.size.height * 0.30, 210.0);
+    final mediaWidth = math.min(mq.size.width * 0.5, 244.0);
+    final maxMediaHeight = math.min(mq.size.height * 0.34, 248.0);
     final bubble = _content(mediaWidth, maxMediaHeight);
     final status = (message.status ?? '').toUpperCase();
+    final isMedia = _isMediaType(message.type);
 
     final avatar = _Avatar(
       name: isMine ? myName : peerName,
@@ -59,7 +60,7 @@ class MessageBubble extends StatelessWidget {
           isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
       children: [
         bubble,
-        if (status == 'SENDING')
+        if (status == 'SENDING' && !isMedia)
           const Padding(
             padding: EdgeInsets.only(top: 6),
             child: _InlineStatus(label: '发送中'),
@@ -86,6 +87,13 @@ class MessageBubble extends StatelessWidget {
               ],
       ),
     );
+  }
+
+  bool _isMediaType(String type) {
+    final normalized = type.toUpperCase();
+    return normalized == 'IMAGE' ||
+        normalized == 'VIDEO' ||
+        normalized == 'DYNAMIC_PHOTO';
   }
 
   Widget _content(double mediaWidth, double maxMediaHeight) {
@@ -118,6 +126,8 @@ class MessageBubble extends StatelessWidget {
       aspectRatio: _resolveAspectRatio(media, fallback: 1.0),
     );
     final url = message.resolvedCoverUrl;
+    final sending = _isSending;
+
     return GestureDetector(
       onTap: url == null || url.trim().isEmpty
           ? null
@@ -125,7 +135,18 @@ class MessageBubble extends StatelessWidget {
       child: _MediaCard(
         width: size.width,
         height: size.height,
-        child: _buildMediaImage(url: url, fit: BoxFit.contain),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            _buildMediaImage(url: url, fit: BoxFit.cover),
+            if (sending)
+              const Positioned(
+                left: 10,
+                bottom: 10,
+                child: _InlineStatus(label: '发送中'),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -143,6 +164,7 @@ class MessageBubble extends StatelessWidget {
     final coverUrl = message.resolvedCoverUrl;
     final videoUrl = message.resolvedPlayUrl;
     final processing = (media?.processingStatus ?? '').toUpperCase() == 'PROCESSING';
+    final sending = _isSending;
 
     return GestureDetector(
       onTap: videoUrl == null || videoUrl.trim().isEmpty
@@ -154,17 +176,28 @@ class MessageBubble extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            _buildMediaImage(url: coverUrl, fit: BoxFit.contain),
+            _buildMediaImage(url: coverUrl, fit: BoxFit.cover),
+            const _MediaShade(),
             if (_formatDuration(media?.duration) case final durationLabel?)
               Positioned(
                 right: 8,
                 bottom: 8,
                 child: _DurationBadge(label: durationLabel),
               ),
-            if (processing)
-              const Center(child: _InlineStatus(label: '处理中'))
-            else
+            if (!processing && !sending)
               const Center(child: _PlayBadge()),
+            if (sending)
+              const Positioned(
+                left: 10,
+                bottom: 10,
+                child: _InlineStatus(label: '发送中'),
+              )
+            else if (processing)
+              const Positioned(
+                left: 10,
+                bottom: 10,
+                child: _InlineStatus(label: '处理中'),
+              ),
           ],
         ),
       ),
@@ -184,6 +217,7 @@ class MessageBubble extends StatelessWidget {
     final coverUrl = message.resolvedCoverUrl;
     final videoUrl = message.resolvedPlayUrl;
     final processing = (media?.processingStatus ?? '').toUpperCase() == 'PROCESSING';
+    final sending = _isSending;
 
     return GestureDetector(
       onTap: videoUrl == null || videoUrl.trim().isEmpty
@@ -205,19 +239,32 @@ class MessageBubble extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            _buildMediaImage(url: coverUrl, fit: BoxFit.contain),
+            _buildMediaImage(url: coverUrl, fit: BoxFit.cover),
+            const _MediaShade(),
             const Positioned(
               top: 8,
               left: 8,
               child: _LiveBadge(),
             ),
-            if (processing)
-              const Center(child: _InlineStatus(label: '准备中')),
+            if (sending)
+              const Positioned(
+                left: 10,
+                bottom: 10,
+                child: _InlineStatus(label: '发送中'),
+              )
+            else if (processing)
+              const Positioned(
+                left: 10,
+                bottom: 10,
+                child: _InlineStatus(label: '准备中'),
+              ),
           ],
         ),
       ),
     );
   }
+
+  bool get _isSending => (message.status ?? '').toUpperCase() == 'SENDING';
 
   Widget _buildMediaImage({
     required String? url,
@@ -369,17 +416,29 @@ class _MediaCard extends StatelessWidget {
     return SizedBox(
       width: width,
       height: height,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: const Color(0xFFF3F4F6),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(14),
-          child: ColoredBox(
-            color: const Color(0xFFF3F4F6),
-            child: child,
-          ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: child,
+      ),
+    );
+  }
+}
+class _MediaShade extends StatelessWidget {
+  const _MediaShade();
+
+  @override
+  Widget build(BuildContext context) {
+    return const DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Colors.transparent,
+            Color(0x16000000),
+            Color(0x55000000),
+          ],
+          stops: [0.45, 0.72, 1.0],
         ),
       ),
     );
@@ -392,32 +451,31 @@ class _NeutralPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: const Color(0xFFF3F4F6),
+      color: Colors.transparent,
       alignment: Alignment.center,
       child: Container(
         width: 42,
         height: 42,
         decoration: BoxDecoration(
-          color: const Color(0xFFE5E7EB),
+          color: const Color(0x33000000),
           borderRadius: BorderRadius.circular(999),
         ),
         child: const Icon(
           Icons.photo_outlined,
-          color: Color(0xFF6B7280),
+          color: Colors.white70,
         ),
       ),
     );
   }
 }
-
 class _PlayBadge extends StatelessWidget {
   const _PlayBadge();
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 44,
-      height: 44,
+      width: 48,
+      height: 48,
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.36),
         shape: BoxShape.circle,
@@ -425,7 +483,7 @@ class _PlayBadge extends StatelessWidget {
       child: const Icon(
         Icons.play_arrow_rounded,
         color: Colors.white,
-        size: 28,
+        size: 30,
       ),
     );
   }
@@ -466,7 +524,7 @@ class _InlineStatus extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.5),
+        color: Colors.black.withOpacity(0.54),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
@@ -515,3 +573,5 @@ class _LiveBadge extends StatelessWidget {
     );
   }
 }
+
+

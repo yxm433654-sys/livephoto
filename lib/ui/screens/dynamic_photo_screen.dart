@@ -3,7 +3,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
-import 'package:vox_flutter/utils/media_downloader.dart';
 import 'package:vox_flutter/utils/media_saver.dart';
 
 class DynamicPhotoScreen extends StatefulWidget {
@@ -32,8 +31,6 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
   bool _closing = false;
   String? _error;
   double _aspectRatio = 3 / 4;
-  int _received = 0;
-  int? _total;
 
   @override
   void initState() {
@@ -46,9 +43,19 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
   }
 
   @override
+  void deactivate() {
+    _pausePreview(syncUi: false);
+    super.deactivate();
+  }
+
+  @override
   void dispose() {
-    unawaited(_stopPreview());
-    _controller?.dispose();
+    _pausePreview(syncUi: false);
+    final controller = _controller;
+    _controller = null;
+    controller?.setVolume(0);
+    controller?.pause();
+    controller?.dispose();
     super.dispose();
   }
 
@@ -58,24 +65,10 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
     setState(() {
       _loading = true;
       _error = null;
-      _received = 0;
-      _total = null;
     });
 
     try {
-      final downloaded = await MediaDownloader.downloadToCacheFile(
-        url: widget.videoUrl,
-        extensionHint: 'mp4',
-        onProgress: (received, total) {
-          if (!mounted) return;
-          setState(() {
-            _received = received;
-            _total = total;
-          });
-        },
-      );
-
-      final controller = VideoPlayerController.file(downloaded.file);
+      final controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl));
       await controller.initialize();
       await controller.setLooping(false);
       await controller.setVolume(1.0);
@@ -108,22 +101,28 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
     }
   }
 
-  Future<void> _stopPreview() async {
+  void _pausePreview({required bool syncUi}) {
     _holding = false;
     final controller = _controller;
     if (controller != null) {
-      await controller.pause();
-      await controller.seekTo(Duration.zero);
+      controller.pause();
+      controller.seekTo(Duration.zero);
     }
-    if (mounted && _showVideo) {
+    if (syncUi && mounted && _showVideo) {
       setState(() => _showVideo = false);
+    } else {
+      _showVideo = false;
     }
+  }
+
+  Future<void> _stopPreview() async {
+    _pausePreview(syncUi: true);
   }
 
   Future<void> _handleExit() async {
     if (_closing) return;
     _closing = true;
-    await _stopPreview();
+    _pausePreview(syncUi: false);
     if (mounted) {
       Navigator.of(context).pop();
     }
@@ -132,9 +131,6 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
-    final progress = (_total == null || _total == 0)
-        ? null
-        : (_received / _total!).clamp(0.0, 1.0);
 
     return PopScope(
       canPop: false,
@@ -221,18 +217,16 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
                                 child: Container(
                                   color: Colors.black.withOpacity(0.18),
                                   alignment: Alignment.center,
-                                  child: SizedBox(
+                                  child: const SizedBox(
                                     width: 220,
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
-                                        LinearProgressIndicator(value: progress),
-                                        const SizedBox(height: 12),
+                                        CircularProgressIndicator(),
+                                        SizedBox(height: 12),
                                         Text(
-                                          progress == null
-                                              ? 'Loading dynamic photo...'
-                                              : 'Loading dynamic photo... ${(progress * 100).round()}%',
-                                          style: const TextStyle(
+                                          'Preparing dynamic photo...',
+                                          style: TextStyle(
                                             color: Colors.white,
                                             fontWeight: FontWeight.w600,
                                           ),
@@ -373,6 +367,3 @@ class _LiveBadge extends StatelessWidget {
     );
   }
 }
-
-
-
