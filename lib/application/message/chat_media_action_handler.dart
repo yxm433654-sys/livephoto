@@ -36,6 +36,9 @@ class ChatMediaActionHandler {
 
   Future<void> showAttachMenu() async {
     final action = await ChatMediaPicker.showAttachMenu(context);
+    if (action != null) {
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
     switch (action) {
       case ChatAttachAction.galleryImage:
         await pickGalleryImage();
@@ -234,3 +237,4 @@ class ChatMediaActionHandler {
     }
   }
 }
+

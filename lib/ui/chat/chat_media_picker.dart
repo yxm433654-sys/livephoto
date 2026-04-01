@@ -22,6 +22,7 @@ class ChatMediaPicker {
 
   static const int imageMaxBytes = 20 * 1024 * 1024;
   static const int videoMaxBytes = 256 * 1024 * 1024;
+  static const int maxSelectionCount = 9;
 
   static Future<ChatAttachAction?> showAttachMenu(BuildContext context) {
     return showModalBottomSheet<ChatAttachAction>(
@@ -47,7 +48,7 @@ class ChatMediaPicker {
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  '图片支持多选，单张建议不超过 20MB；视频和动态照片建议不超过 256MB。',
+                  '图片和视频最多可选 9 项；图片单张建议不超过 20MB，视频和动态照片建议不超过 256MB。',
                   style: TextStyle(
                     fontSize: 12,
                     color: Color(0xFF6B7280),
@@ -227,9 +228,9 @@ class ChatMediaPicker {
   static String pickerHint(ChatAssetPickerMode mode) {
     switch (mode) {
       case ChatAssetPickerMode.image:
-        return '可多选，单张建议不超过 20MB';
+        return '可多选，最多 9 张，单张建议不超过 20MB';
       case ChatAssetPickerMode.video:
-        return '可多选，单个视频建议不超过 256MB';
+        return '可多选，最多 9 个，单个视频建议不超过 256MB';
       case ChatAssetPickerMode.livePhoto:
         return '动态照片建议不超过 256MB';
     }
@@ -264,13 +265,21 @@ class _AssetPickerSheetState extends State<_AssetPickerSheet> {
       return;
     }
 
+    final existingIndex = _selected.indexWhere((item) => item.id == asset.id);
+    if (existingIndex >= 0) {
+      setState(() {
+        _selected.removeAt(existingIndex);
+      });
+      return;
+    }
+
+    if (_selected.length >= ChatMediaPicker.maxSelectionCount) {
+      widget.showSnack('最多只能选择 ${ChatMediaPicker.maxSelectionCount} 项。');
+      return;
+    }
+
     setState(() {
-      final index = _selected.indexWhere((item) => item.id == asset.id);
-      if (index >= 0) {
-        _selected.removeAt(index);
-      } else {
-        _selected.add(asset);
-      }
+      _selected.add(asset);
     });
   }
 
