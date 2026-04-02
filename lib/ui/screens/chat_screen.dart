@@ -4,19 +4,20 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
-import 'package:vox_flutter/application/message/conversation_flow.dart';
 import 'package:vox_flutter/application/message/chat_media_action_handler.dart';
 import 'package:vox_flutter/application/message/chat_message_subscription.dart';
+import 'package:vox_flutter/application/message/conversation_flow.dart';
 import 'package:vox_flutter/application/message/media_url_resolver.dart';
 import 'package:vox_flutter/application/message/message_workflow_facade.dart';
 import 'package:vox_flutter/models/message.dart';
 import 'package:vox_flutter/state/app_state.dart';
 import 'package:vox_flutter/ui/chat/chat_composer.dart';
-import 'package:vox_flutter/ui/chat/local_message_factory.dart';
 import 'package:vox_flutter/ui/chat/chat_media_navigator.dart';
 import 'package:vox_flutter/ui/chat/dynamic_photo_adapter.dart';
+import 'package:vox_flutter/ui/chat/local_message_factory.dart';
 import 'package:vox_flutter/ui/chat/message_list.dart';
 import 'package:vox_flutter/ui/chat/message_sender.dart';
+import 'package:vox_flutter/utils/user_error_message.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key, required this.peerId});
@@ -32,11 +33,11 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollCtrl = ScrollController();
   final FocusNode _textFocusNode = FocusNode();
   final GlobalKey _moreButtonKey = GlobalKey();
-  final ConversationFlow _conversationCoordinator =
-      const ConversationFlow();
+  final ConversationFlow _conversationFlow = const ConversationFlow();
   final ChatMessageSubscription _messageSubscription =
       const ChatMessageSubscription();
-  final DynamicPhotoAdapter _dynamicPhotoAdapter = const DynamicPhotoAdapter();
+  final DynamicPhotoAdapter _dynamicPhotoAdapter =
+      const DynamicPhotoAdapter();
 
   final List<ChatMessage> _messages = <ChatMessage>[];
   final Map<int, Uint8List> _localCoverBytesByMessageId = <int, Uint8List>{};
@@ -44,13 +45,16 @@ class _ChatScreenState extends State<ChatScreen> {
 
   ChatMediaNavigator? _chatMediaNavigator;
   MessageWorkflowFacade? _workflowFacade;
-  StreamSubscription<ChatMessage>? _msgSub;
+  StreamSubscription<ChatMessage>? _messageEventSubscription;
+  Timer? _processingRefreshTimer;
 
   bool _loading = true;
-  int _pendingSendCount = 0;
   bool _userAtBottom = true;
   bool _showEmojiPanel = false;
+  bool _loadingMoreHistory = false;
   int _lastMessageId = 0;
+  int _currentPage = 0;
+  bool _hasMoreHistory = true;
   int _tempMessageSeed = -1;
   String? _error;
 
@@ -59,12 +63,13 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _scrollCtrl.addListener(_onScroll);
     _textFocusNode.addListener(_onTextFocusChanged);
-    _init();
+    unawaited(_init());
   }
 
   @override
   void dispose() {
-    _msgSub?.cancel();
+    _messageEventSubscription?.cancel();
+    _processingRefreshTimer?.cancel();
     _textCtrl.dispose();
     _textFocusNode.removeListener(_onTextFocusChanged);
     _textFocusNode.dispose();
@@ -74,18 +79,27 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _onScroll() {
-    if (!_scrollCtrl.hasClients) return;
+    if (!_scrollCtrl.hasClients) {
+      return;
+    }
     final max = _scrollCtrl.position.maxScrollExtent;
     final current = _scrollCtrl.position.pixels;
     _userAtBottom = (max - current) <= 80.0;
+    if (current <= 120 && !_loadingMoreHistory && _hasMoreHistory) {
+      unawaited(_loadMoreHistory());
+    }
   }
 
   void _onTextFocusChanged() {
-    if (!_textFocusNode.hasFocus) return;
+    if (!_textFocusNode.hasFocus) {
+      return;
+    }
     _userAtBottom = true;
     _scrollToBottomSettled();
     Future<void>.delayed(const Duration(milliseconds: 120), () {
-      if (!mounted || !_textFocusNode.hasFocus) return;
+      if (!mounted || !_textFocusNode.hasFocus) {
+        return;
+      }
       _scrollToBottomSettled();
     });
   }
@@ -97,20 +111,23 @@ class _ChatScreenState extends State<ChatScreen> {
     _textFocusNode.unfocus();
     await Future<void>.delayed(const Duration(milliseconds: 140));
   }
+
   Future<void> _init() async {
     final state = context.read<AppState>();
     final workflow = _workflow(state);
     final session = state.session;
     if (session == null) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _loading = false;
-        _error = '请重新登录后再试。';
+        _error = 'Please sign in again and try later.';
       });
       return;
     }
 
-    final conversationState = await _conversationCoordinator.initialize(
+    final conversationState = await _conversationFlow.initialize(
       workflow: workflow,
       currentUserId: session.userId,
       peerId: widget.peerId,
@@ -120,28 +137,91 @@ class _ChatScreenState extends State<ChatScreen> {
       ..clear()
       ..addAll(conversationState.messages);
     _lastMessageId = conversationState.lastMessageId;
+    _currentPage = conversationState.currentPage;
+    _hasMoreHistory = conversationState.hasMore;
     _error = conversationState.errorMessage;
     _subscribeToEvents(workflow, session.userId);
+    _syncProcessingRefreshTimer();
 
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     setState(() => _loading = false);
     _scrollToBottomSettled();
     Future<void>.delayed(const Duration(milliseconds: 80), () {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
       _scrollToBottomSettled();
     });
   }
 
+  Future<void> _loadMoreHistory() async {
+    if (_loadingMoreHistory || !_hasMoreHistory) {
+      return;
+    }
+
+    final state = context.read<AppState>();
+    final session = state.session;
+    if (session == null || !_scrollCtrl.hasClients) {
+      return;
+    }
+
+    _loadingMoreHistory = true;
+    final previousOffset = _scrollCtrl.offset;
+    final previousMaxExtent = _scrollCtrl.position.maxScrollExtent;
+
+    try {
+      final nextState = await _conversationFlow.loadNextPage(
+        workflow: _workflow(state),
+        currentUserId: session.userId,
+        peerId: widget.peerId,
+        currentMessages: _messages,
+        currentPage: _currentPage,
+      );
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(nextState.messages);
+        _currentPage = nextState.currentPage;
+        _hasMoreHistory = nextState.hasMore;
+      });
+      _syncProcessingRefreshTimer();
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollCtrl.hasClients) {
+          return;
+        }
+        final newMaxExtent = _scrollCtrl.position.maxScrollExtent;
+        final delta = newMaxExtent - previousMaxExtent;
+        final target = previousOffset + (delta > 0 ? delta : 0);
+        _scrollCtrl.jumpTo(
+          target.clamp(0.0, _scrollCtrl.position.maxScrollExtent),
+        );
+      });
+    } catch (error) {
+      _showSnack(UserErrorMessage.from(error));
+    } finally {
+      _loadingMoreHistory = false;
+    }
+  }
+
   void _subscribeToEvents(MessageWorkflowFacade workflow, int currentUserId) {
-    _msgSub?.cancel();
-    _msgSub = _messageSubscription.bind(
+    _messageEventSubscription?.cancel();
+    _messageEventSubscription = _messageSubscription.bind(
       workflow: workflow,
       currentUserId: currentUserId,
       peerId: widget.peerId,
       currentMessages: _messages,
       isUserAtBottom: () => _userAtBottom,
       onBeforeApply: (incomingMessage, replacedTempId) {
-        if (replacedTempId == null) return;
+        if (replacedTempId == null) {
+          return;
+        }
         final localBytes = _localCoverBytesByMessageId.remove(replacedTempId);
         final localPath = _localCoverPathByMessageId.remove(replacedTempId);
         if (localBytes != null) {
@@ -152,7 +232,9 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       },
       onUpdate: (update) {
-        if (!mounted) return;
+        if (!mounted) {
+          return;
+        }
         setState(() {
           _messages
             ..clear()
@@ -162,6 +244,7 @@ class _ChatScreenState extends State<ChatScreen> {
           }
           _dropLocalPreviewIfRemoteReady(update.incomingMessage);
         });
+        _syncProcessingRefreshTimer();
         if (update.conversationUpdate.shouldScrollToBottom) {
           _scrollToBottom(
             animated: update.incomingMessage.senderId != currentUserId,
@@ -173,7 +256,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _scrollToBottom({bool animated = true}) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scrollCtrl.hasClients) return;
+      if (!mounted || !_scrollCtrl.hasClients) {
+        return;
+      }
       final target = _scrollCtrl.position.maxScrollExtent;
       if (animated) {
         _scrollCtrl.animateTo(
@@ -187,8 +272,20 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _scrollToBottomSettled() {
+    _scrollToBottom(animated: false);
+    Future<void>.delayed(const Duration(milliseconds: 90), () {
+      if (!mounted) {
+        return;
+      }
+      _scrollToBottom(animated: false);
+    });
+  }
+
   void _showSnack(String message) {
-    if (!mounted) return;
+    if (!mounted) {
+      return;
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
@@ -225,8 +322,8 @@ class _ChatScreenState extends State<ChatScreen> {
   MessageWorkflowFacade _workflow(AppState state) {
     return _workflowFacade ??= MessageWorkflowFacade(
       messageEvents: state.messageEvents,
-      prefetchPeer: state.prefetchUser,
       attachmentService: state.attachments,
+      prefetchPeer: state.prefetchUser,
       clearUnread: state.clearUnread,
       refreshSessions: state.refreshSessions,
       loadHistory: ({
@@ -291,6 +388,19 @@ class _ChatScreenState extends State<ChatScreen> {
           videoId: videoId,
         );
       },
+      sendFile: ({
+        required int senderId,
+        required int receiverId,
+        required int resourceId,
+        required String fileName,
+      }) {
+        return state.messages.sendFile(
+          senderId: senderId,
+          receiverId: receiverId,
+          resourceId: resourceId,
+          fileName: fileName,
+        );
+      },
       uploadFileFromPath: ({
         required String filePath,
         int? userId,
@@ -325,10 +435,13 @@ class _ChatScreenState extends State<ChatScreen> {
       insertLocalMessage: _insertLocalMessage,
       replaceMessage: _replaceMessage,
       removeLocalMessage: _removeLocalMessage,
+      getMessageById: _messageById,
+      getLocalPathByMessageId: _localPathByMessageId,
       setSending: (sending) {
-        if (!mounted) return;
+        if (!mounted) {
+          return;
+        }
         setState(() {
-          _pendingSendCount = sending ? _pendingSendCount + 1 : (_pendingSendCount > 0 ? _pendingSendCount - 1 : 0);
           if (sending) {
             _error = null;
           }
@@ -352,8 +465,11 @@ class _ChatScreenState extends State<ChatScreen> {
       peerId: widget.peerId,
       currentUserId: currentUserId,
       dynamicPhotoAdapter: _dynamicPhotoAdapter,
-      messageSender: _messageSender(state, currentUserId),      onConversationCleared: () {
-        if (!mounted) return;
+      messageSender: _messageSender(state, currentUserId),
+      onConversationCleared: () {
+        if (!mounted) {
+          return;
+        }
         setState(() {
           _messages.clear();
           _localCoverBytesByMessageId.clear();
@@ -364,14 +480,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  void _scrollToBottomSettled() {
-    _scrollToBottom(animated: false);
-    Future<void>.delayed(const Duration(milliseconds: 90), () {
-      if (!mounted) return;
-      _scrollToBottom(animated: false);
-    });
-  }
-
   void _insertLocalMessage(
     ChatMessage message, {
     Uint8List? localCoverBytes,
@@ -379,7 +487,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }) {
     setState(() {
       _messages.add(message);
-      _messages.sort(_conversationCoordinator.compareMessages);
+      _messages.sort(_conversationFlow.compareMessages);
       if (localCoverBytes != null) {
         _localCoverBytesByMessageId[message.id] = localCoverBytes;
       }
@@ -387,12 +495,15 @@ class _ChatScreenState extends State<ChatScreen> {
         _localCoverPathByMessageId[message.id] = localCoverPath;
       }
     });
+    _syncProcessingRefreshTimer();
     _scrollToBottomSettled();
   }
 
   void _replaceMessage(int tempId, ChatMessage message) {
     final index = _messages.indexWhere((item) => item.id == tempId);
-    if (index < 0) return;
+    if (index < 0) {
+      return;
+    }
     final localBytes = _localCoverBytesByMessageId.remove(tempId);
     final localPath = _localCoverPathByMessageId.remove(tempId);
     setState(() {
@@ -404,6 +515,7 @@ class _ChatScreenState extends State<ChatScreen> {
         _localCoverPathByMessageId[message.id] = localPath;
       }
     });
+    _syncProcessingRefreshTimer();
   }
 
   void _removeLocalMessage(int tempId) {
@@ -412,18 +524,127 @@ class _ChatScreenState extends State<ChatScreen> {
       _localCoverBytesByMessageId.remove(tempId);
       _localCoverPathByMessageId.remove(tempId);
     });
+    _syncProcessingRefreshTimer();
+  }
+
+  ChatMessage? _messageById(int id) {
+    for (final message in _messages) {
+      if (message.id == id) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  String? _localPathByMessageId(int id) {
+    return _localCoverPathByMessageId[id];
+  }
+
+  bool _needsProcessingRefresh(ChatMessage message) {
+    final type = message.type.toUpperCase();
+    if (type != 'VIDEO' && type != 'DYNAMIC_PHOTO') {
+      return false;
+    }
+    return (message.media?.processingStatus ?? '').toUpperCase() == 'PROCESSING';
+  }
+
+  void _syncProcessingRefreshTimer() {
+    final needsRefresh = _messages.any(_needsProcessingRefresh);
+    if (!needsRefresh) {
+      _processingRefreshTimer?.cancel();
+      _processingRefreshTimer = null;
+      return;
+    }
+    _processingRefreshTimer ??= Timer.periodic(
+      const Duration(seconds: 4),
+      (_) => unawaited(_refreshProcessingMessages()),
+    );
+  }
+
+  Future<void> _refreshProcessingMessages() async {
+    if (!mounted || _messages.isEmpty) {
+      return;
+    }
+    final state = context.read<AppState>();
+    final session = state.session;
+    if (session == null) {
+      return;
+    }
+
+    try {
+      final latestMessages = await _workflow(state).loadHistory(
+        userId: session.userId,
+        peerId: widget.peerId,
+        page: 0,
+        size: ConversationFlow.initialPageSize,
+      );
+      if (!mounted) {
+        return;
+      }
+
+      final latestById = <int, ChatMessage>{
+        for (final item in latestMessages) item.id: item,
+      };
+      var changed = false;
+      setState(() {
+        for (var i = 0; i < _messages.length; i += 1) {
+          final current = _messages[i];
+          final updated = latestById[current.id];
+          if (updated == null) {
+            continue;
+          }
+          if (!_isMessageRefreshChanged(current, updated)) {
+            continue;
+          }
+          _messages[i] = updated;
+          _dropLocalPreviewIfRemoteReady(updated);
+          changed = true;
+        }
+      });
+      if (changed || !_messages.any(_needsProcessingRefresh)) {
+        _syncProcessingRefreshTimer();
+      }
+    } catch (_) {}
+  }
+
+  bool _isMessageRefreshChanged(ChatMessage current, ChatMessage updated) {
+    return current.status != updated.status ||
+        current.coverUrl != updated.coverUrl ||
+        current.videoUrl != updated.videoUrl ||
+        current.resourceId != updated.resourceId ||
+        current.videoResourceId != updated.videoResourceId ||
+        current.media?.processingStatus != updated.media?.processingStatus ||
+        current.media?.coverUrl != updated.media?.coverUrl ||
+        current.media?.playUrl != updated.media?.playUrl ||
+        current.media?.sourceType != updated.media?.sourceType;
+  }
+
+  Future<void> _retryMessage(ChatMessage message) async {
+    final state = context.read<AppState>();
+    final session = state.session;
+    if (session == null) {
+      _showSnack('Please sign in again and try later.');
+      return;
+    }
+    await _messageSender(state, session.userId).retryMessage(message);
   }
 
   bool _shouldShowTimestamp(int index) {
-    if (index <= 0) return true;
+    if (index <= 0) {
+      return true;
+    }
     final current = _messages[index].createdAt;
     final previous = _messages[index - 1].createdAt;
-    if (current == null || previous == null) return true;
+    if (current == null || previous == null) {
+      return true;
+    }
     return current.difference(previous).abs() >= const Duration(minutes: 5);
   }
 
   String _formatTimestamp(DateTime? time) {
-    if (time == null) return '';
+    if (time == null) {
+      return '';
+    }
     return DateFormat('HH:mm').format(time.toLocal());
   }
 
@@ -448,11 +669,15 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _sendText() async {
     _userAtBottom = true;
     final text = _textCtrl.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty) {
+      return;
+    }
 
     final state = context.read<AppState>();
     final session = state.session;
-    if (session == null) return;
+    if (session == null) {
+      return;
+    }
 
     await _messageSender(state, session.userId).sendText(
       text: text,
@@ -466,19 +691,24 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _showAttachMenu() async {
     final state = context.read<AppState>();
     final session = state.session;
-    if (session == null) return;
+    if (session == null) {
+      return;
+    }
 
     _userAtBottom = true;
     await _dismissComposerOverlays();
-    if (!mounted) return;
-
+    if (!mounted) {
+      return;
+    }
     await _mediaActionHandler(state, session.userId).showAttachMenu();
   }
 
   Future<void> _handleChatAction(_ChatAction action) async {
     final state = context.read<AppState>();
     final session = state.session;
-    if (session == null) return;
+    if (session == null) {
+      return;
+    }
     final handler = _mediaActionHandler(state, session.userId);
     switch (action) {
       case _ChatAction.clearConversation:
@@ -493,7 +723,9 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _showChatActionsSheet() async {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
     final button = _moreButtonKey.currentContext?.findRenderObject() as RenderBox?;
-    if (overlay == null || button == null) return;
+    if (overlay == null || button == null) {
+      return;
+    }
 
     final topLeft = button.localToGlobal(Offset.zero, ancestor: overlay);
     final bottomRight = button.localToGlobal(
@@ -516,14 +748,14 @@ class _ChatScreenState extends State<ChatScreen> {
           value: _ChatAction.clearConversation,
           child: _MenuActionRow(
             icon: Icons.delete_sweep_outlined,
-            label: '清空聊天记录',
+            label: 'Clear conversation',
           ),
         ),
         PopupMenuItem(
           value: _ChatAction.clearCache,
           child: _MenuActionRow(
             icon: Icons.cleaning_services_outlined,
-            label: '清除媒体缓存',
+            label: 'Clear media cache',
           ),
         ),
       ],
@@ -581,7 +813,7 @@ class _ChatScreenState extends State<ChatScreen> {
               actions: [
                 TextButton(
                   onPressed: state.clearConnectionNotice,
-                  child: const Text('知道了'),
+                  child: const Text('Dismiss'),
                 ),
               ],
             ),
@@ -595,9 +827,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       _error = null;
                       _loading = true;
                     });
-                    _init();
+                    unawaited(_init());
                   },
-                  child: const Text('重试'),
+                  child: const Text('Retry'),
                 ),
               ],
             ),
@@ -619,11 +851,13 @@ class _ChatScreenState extends State<ChatScreen> {
               localCoverBytesByMessageId: _localCoverBytesByMessageId,
               localCoverPathByMessageId: _localCoverPathByMessageId,
               urlResolver: urlResolver,
+              onRetryMessage: _retryMessage,
             ),
           ),
           ChatComposer(
             textController: _textCtrl,
-            textFocusNode: _textFocusNode,            showEmojiPanel: _showEmojiPanel,
+            textFocusNode: _textFocusNode,
+            showEmojiPanel: _showEmojiPanel,
             onShowAttachMenu: _showAttachMenu,
             onToggleEmojiPanel: _toggleEmojiPanel,
             onSendText: _sendText,
@@ -640,7 +874,41 @@ class _ChatScreenState extends State<ChatScreen> {
 enum _ChatAction { clearConversation, clearCache }
 
 const List<String> _emojiSet = <String>[
-  '😀','😁','😂','😅','😉','😍','😘','🤔','😎','😭','😡','😴','🥳','😇','🤗','🙌','👏','👍','✌️','🔥','🎉','❤️','💡','🌈','🍀','☕','🎧','📷','🚀','🌙','⭐','🐶','🐱','🦊','🫶',
+  '😀',
+  '😁',
+  '😂',
+  '😅',
+  '😉',
+  '😍',
+  '😘',
+  '🤔',
+  '😎',
+  '😭',
+  '😡',
+  '😴',
+  '🥳',
+  '😇',
+  '🤗',
+  '🙌',
+  '👏',
+  '👍',
+  '✌️',
+  '🔥',
+  '🎉',
+  '❤️',
+  '💡',
+  '🌈',
+  '🍀',
+  '☕',
+  '🎧',
+  '📷',
+  '🚀',
+  '🌙',
+  '⭐',
+  '🐶',
+  '🐱',
+  '🦊',
+  '🫶',
 ];
 
 class _MenuActionRow extends StatelessWidget {
@@ -660,13 +928,3 @@ class _MenuActionRow extends StatelessWidget {
     );
   }
 }
-
-
-
-
-
-
-
-
-
-

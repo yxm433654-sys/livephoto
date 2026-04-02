@@ -1,6 +1,7 @@
 ﻿import 'dart:async';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -9,6 +10,7 @@ import 'package:vox_flutter/models/media_draft_metadata.dart';
 import 'package:vox_flutter/services/attachment/dynamic_photo_upload_service.dart';
 import 'package:vox_flutter/ui/chat/chat_media_picker.dart';
 import 'package:vox_flutter/ui/chat/dynamic_photo_adapter.dart';
+import 'package:vox_flutter/ui/chat/file_picker_service.dart';
 import 'package:vox_flutter/ui/chat/message_sender.dart';
 import 'package:vox_flutter/utils/media_downloader.dart';
 import 'package:vox_flutter/utils/user_error_message.dart';
@@ -49,6 +51,9 @@ class ChatMediaActionHandler {
       case ChatAttachAction.livePhoto:
         await pickGalleryDynamicPhoto();
         break;
+      case ChatAttachAction.file:
+        await pickFiles();
+        break;
       case null:
         break;
     }
@@ -72,6 +77,19 @@ class ChatMediaActionHandler {
     );
     if (assets.isEmpty) return;
     unawaited(_sendSelectedVideos(assets));
+  }
+
+  Future<void> pickFiles() async {
+    final files = await FilePickerService.pickFiles(
+      maxCount: ChatMediaPicker.maxSelectionCount,
+    );
+    if (files.isEmpty) {
+      return;
+    }
+    if (files.length >= ChatMediaPicker.maxSelectionCount) {
+      showSnack('文件最多可选 ${ChatMediaPicker.maxSelectionCount} 项。');
+    }
+    unawaited(_sendSelectedFiles(files));
   }
 
   Future<void> pickGalleryDynamicPhoto() async {
@@ -175,6 +193,25 @@ class ChatMediaActionHandler {
     }
   }
 
+  Future<void> _sendSelectedFiles(List<PlatformFile> files) async {
+    for (final file in files.take(ChatMediaPicker.maxSelectionCount)) {
+      if ((file.path ?? '').trim().isEmpty) {
+        showSnack('无法读取所选文件。');
+        continue;
+      }
+      final size = file.size;
+      if (size > ChatMediaPicker.videoMaxBytes) {
+        showSnack('文件大小 ${_formatBytes(size)}，超过 256MB，已跳过。');
+        continue;
+      }
+      await messageSender.sendFileFromPath(
+        filePath: file.path!,
+        fileName: file.name,
+        fileSize: size,
+      );
+    }
+  }
+
   String _formatBytes(int bytes) {
     const units = <String>['B', 'KB', 'MB', 'GB'];
     double value = bytes.toDouble();
@@ -237,4 +274,3 @@ class ChatMediaActionHandler {
     }
   }
 }
-

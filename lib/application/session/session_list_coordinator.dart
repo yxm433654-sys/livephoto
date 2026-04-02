@@ -45,6 +45,7 @@ class SessionListCoordinator {
         avatarUrl: summary?.peerAvatarUrl ?? state.avatarUrlFor(peerId),
         unreadCount: unread,
         subtitle: _buildSubtitle(summary, unread),
+        updatedAt: summary?.updatedAt,
       );
     }).toList();
   }

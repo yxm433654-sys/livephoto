@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 
 import 'package:vox_flutter/models/message.dart';
@@ -16,6 +16,7 @@ class RealtimeService {
   StreamSubscription? _wsSub;
   Timer? _pollTimer;
   int _lastMessageId = 0;
+  final Map<int, String> _messageFingerprints = <int, String>{};
 
   void start({
     required int userId,
@@ -42,10 +43,7 @@ class RealtimeService {
             final data = obj['data'];
             if (type == 'NEW_MESSAGE') {
               final msg = ChatMessage.fromJson(data);
-              if (msg.id > _lastMessageId) {
-                _lastMessageId = msg.id;
-              }
-              onMessage(msg);
+              _ingestMessage(msg, onMessage);
             } else if (type == 'SESSION_UPDATED' ||
                 type == 'SESSION_LIST_CHANGED') {
               onSessionChanged();
@@ -64,13 +62,11 @@ class RealtimeService {
     _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
       try {
         final items = await _messageService.poll(
-            userId: userId,
-            lastMessageId: _lastMessageId == 0 ? null : _lastMessageId);
-        for (final m in items) {
-          if (m.id > _lastMessageId) {
-            _lastMessageId = m.id;
-          }
-          onMessage(m);
+          userId: userId,
+          lastMessageId: _lastMessageId == 0 ? null : _lastMessageId,
+        );
+        for (final message in items) {
+          _ingestMessage(message, onMessage);
         }
       } catch (e) {
         onError(e);
@@ -91,5 +87,32 @@ class RealtimeService {
     _wsSub = null;
     _channel?.sink.close();
     _channel = null;
+    _messageFingerprints.clear();
+  }
+
+  void _ingestMessage(
+    ChatMessage message,
+    void Function(ChatMessage message) onMessage,
+  ) {
+    if (message.id > _lastMessageId) {
+      _lastMessageId = message.id;
+    }
+
+    final fingerprint = jsonEncode(message.toJson());
+    final previous = _messageFingerprints[message.id];
+    if (previous == fingerprint) {
+      return;
+    }
+
+    _messageFingerprints[message.id] = fingerprint;
+    if (_messageFingerprints.length > 500) {
+      final staleKeys = _messageFingerprints.keys.toList()
+        ..sort((a, b) => a.compareTo(b));
+      for (final key in staleKeys.take(_messageFingerprints.length - 400)) {
+        _messageFingerprints.remove(key);
+      }
+    }
+
+    onMessage(message);
   }
 }

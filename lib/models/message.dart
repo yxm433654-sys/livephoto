@@ -1,4 +1,4 @@
-import 'package:vox_flutter/models/chat_media.dart';
+﻿import 'package:vox_flutter/models/chat_media.dart';
 
 class ChatMessage {
   ChatMessage({
@@ -31,6 +31,44 @@ class ChatMessage {
 
   String? get resolvedCoverUrl => media?.coverUrl ?? coverUrl;
   String? get resolvedPlayUrl => media?.playUrl ?? videoUrl;
+  bool get isSending => (status ?? '').toUpperCase() == 'SENDING';
+  bool get isFailed => (status ?? '').toUpperCase() == 'FAILED';
+
+  ChatMessage copyWith({
+    int? id,
+    int? senderId,
+    int? receiverId,
+    String? type,
+    Object? content = _unset,
+    Object? resourceId = _unset,
+    Object? videoResourceId = _unset,
+    Object? coverUrl = _unset,
+    Object? videoUrl = _unset,
+    Object? media = _unset,
+    Object? status = _unset,
+    Object? createdAt = _unset,
+  }) {
+    return ChatMessage(
+      id: id ?? this.id,
+      senderId: senderId ?? this.senderId,
+      receiverId: receiverId ?? this.receiverId,
+      type: type ?? this.type,
+      content: identical(content, _unset) ? this.content : content as String?,
+      resourceId: identical(resourceId, _unset)
+          ? this.resourceId
+          : resourceId as int?,
+      videoResourceId: identical(videoResourceId, _unset)
+          ? this.videoResourceId
+          : videoResourceId as int?,
+      coverUrl: identical(coverUrl, _unset) ? this.coverUrl : coverUrl as String?,
+      videoUrl: identical(videoUrl, _unset) ? this.videoUrl : videoUrl as String?,
+      media: identical(media, _unset) ? this.media : media as ChatMedia?,
+      status: identical(status, _unset) ? this.status : status as String?,
+      createdAt: identical(createdAt, _unset)
+          ? this.createdAt
+          : createdAt as DateTime?,
+    );
+  }
 
   static ChatMessage fromJson(Object? raw) {
     final json = raw as Map<String, dynamic>;
@@ -71,3 +109,5 @@ class ChatMessage {
         'createdAt': createdAt?.toIso8601String(),
       };
 }
+
+const Object _unset = Object();

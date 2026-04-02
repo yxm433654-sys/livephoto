@@ -15,6 +15,7 @@ class MessageWorkflowFacade {
     required this.sendImage,
     required this.sendVideo,
     required this.sendDynamicPhoto,
+    required this.sendFile,
     required this.uploadFileFromPath,
     required this.clearConversation,
   });
@@ -53,6 +54,12 @@ class MessageWorkflowFacade {
     required int coverId,
     required int videoId,
   }) sendDynamicPhoto;
+  final Future<int> Function({
+    required int senderId,
+    required int receiverId,
+    required int resourceId,
+    required String fileName,
+  }) sendFile;
   final Future<AttachmentUploadResponse> Function({
     required String filePath,
     int? userId,

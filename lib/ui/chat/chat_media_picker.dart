@@ -9,6 +9,7 @@ enum ChatAttachAction {
   galleryImage,
   galleryVideo,
   livePhoto,
+  file,
 }
 
 enum ChatAssetPickerMode {
@@ -40,7 +41,7 @@ class ChatMediaPicker {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  '发送媒体',
+                  '发送内容',
                   style: TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.w700,
@@ -48,7 +49,7 @@ class ChatMediaPicker {
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  '图片和视频最多可选 9 项；图片单张建议不超过 20MB，视频和动态照片建议不超过 256MB。',
+                  '图片、视频和文件最多可选 9 项；图片单张建议不超过 20MB，视频、动态照片和普通文件建议不超过 256MB。',
                   style: TextStyle(
                     fontSize: 12,
                     color: Color(0xFF6B7280),
@@ -56,8 +57,9 @@ class ChatMediaPicker {
                   ),
                 ),
                 const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
                   children: [
                     _AttachTile(
                       icon: Icons.image_outlined,
@@ -84,6 +86,15 @@ class ChatMediaPicker {
                       iconColor: const Color(0xFFDB2777),
                       onTap: () => Navigator.of(sheetContext).pop(
                         ChatAttachAction.livePhoto,
+                      ),
+                    ),
+                    _AttachTile(
+                      icon: Icons.attach_file_rounded,
+                      label: '文件',
+                      color: const Color(0xFFF3E8FF),
+                      iconColor: const Color(0xFF7C3AED),
+                      onTap: () => Navigator.of(sheetContext).pop(
+                        ChatAttachAction.file,
                       ),
                     ),
                   ],
@@ -190,7 +201,9 @@ class ChatMediaPicker {
 
     final candidates = imageAssets.take(40).toList();
     final detected = await Future.wait(
-      candidates.map((asset) async => MapEntry(asset, await _isDynamicAsset(asset))),
+      candidates.map(
+        (asset) async => MapEntry(asset, await _isDynamicAsset(asset)),
+      ),
     );
 
     final filtered = <AssetEntity>[];
@@ -413,17 +426,17 @@ class _AttachTile extends StatelessWidget {
       borderRadius: BorderRadius.circular(18),
       onTap: onTap,
       child: SizedBox(
-        width: 92,
+        width: 80,
         child: Column(
           children: [
             Container(
-              width: 72,
-              height: 72,
+              width: 68,
+              height: 68,
               decoration: BoxDecoration(
                 color: color,
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: Icon(icon, color: iconColor, size: 30),
+              child: Icon(icon, color: iconColor, size: 28),
             ),
             const SizedBox(height: 10),
             Text(

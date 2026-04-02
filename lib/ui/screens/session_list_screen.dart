@@ -245,6 +245,7 @@ class _SessionListScreenState extends State<SessionListScreen> {
                           avatarUrl: item.avatarUrl,
                           unreadCount: item.unreadCount,
                           subtitle: item.subtitle,
+                          updatedAt: item.updatedAt,
                           onTap: () {
                             sessionList.clearUnread(peerId);
                             Navigator.of(context).push(
@@ -323,3 +324,4 @@ class _EmptyConversationState extends StatelessWidget {
     );
   }
 }
+

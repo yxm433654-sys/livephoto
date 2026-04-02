@@ -7,6 +7,8 @@ import 'package:vox_flutter/utils/user_error_message.dart';
 class ConversationFlow {
   const ConversationFlow();
 
+  static const int initialPageSize = 50;
+
   Future<ChatConversationState> initialize({
     required MessageWorkflowFacade workflow,
     required int currentUserId,
@@ -18,15 +20,16 @@ class ConversationFlow {
         userId: currentUserId,
         peerId: peerId,
         page: 0,
-        size: 100,
+        size: initialPageSize,
       );
       final sorted = List<ChatMessage>.from(history)..sort(compareMessages);
       final lastMessageId =
           sorted.isEmpty ? 0 : sorted.map((e) => e.id).reduce((a, b) => a > b ? a : b);
 
-      await markAllRead(
+      await markConversationRead(
         workflow: workflow,
         currentUserId: currentUserId,
+        peerId: peerId,
         messages: sorted,
       );
       workflow.clearUnread(peerId);
@@ -34,14 +37,52 @@ class ConversationFlow {
       return ChatConversationState(
         messages: sorted,
         lastMessageId: lastMessageId,
+        currentPage: 0,
+        hasMore: history.length >= initialPageSize,
       );
     } catch (error) {
       return ChatConversationState(
         messages: const <ChatMessage>[],
         lastMessageId: 0,
+        currentPage: 0,
+        hasMore: false,
         errorMessage: UserErrorMessage.from(error),
       );
     }
+  }
+
+  Future<ChatConversationState> loadNextPage({
+    required MessageWorkflowFacade workflow,
+    required int currentUserId,
+    required int peerId,
+    required List<ChatMessage> currentMessages,
+    required int currentPage,
+    int pageSize = initialPageSize,
+  }) async {
+    final nextPage = currentPage + 1;
+    final history = await workflow.loadHistory(
+      userId: currentUserId,
+      peerId: peerId,
+      page: nextPage,
+      size: pageSize,
+    );
+
+    final merged = <int, ChatMessage>{
+      for (final message in currentMessages) message.id: message,
+      for (final message in history) message.id: message,
+    }.values.toList()
+      ..sort(compareMessages);
+
+    final lastMessageId = merged.isEmpty
+        ? 0
+        : merged.map((e) => e.id).reduce((a, b) => a > b ? a : b);
+
+    return ChatConversationState(
+      messages: merged,
+      lastMessageId: lastMessageId,
+      currentPage: nextPage,
+      hasMore: history.length >= pageSize,
+    );
   }
 
   Future<ChatConversationUpdate?> applyIncomingMessage({
@@ -97,18 +138,40 @@ class ConversationFlow {
     );
   }
 
-  Future<void> markAllRead({
+  Future<void> markConversationRead({
     required MessageWorkflowFacade workflow,
     required int currentUserId,
+    required int peerId,
     required List<ChatMessage> messages,
   }) async {
-    for (final message in messages) {
-      await markMessageRead(
-        workflow: workflow,
-        currentUserId: currentUserId,
-        message: message,
-      );
+    final latestUnread = messages.lastWhere(
+      (message) =>
+          message.receiverId == currentUserId &&
+          (message.status ?? '').toUpperCase() != 'READ',
+      orElse: () => ChatMessage(
+        id: 0,
+        senderId: 0,
+        receiverId: 0,
+        type: 'TEXT',
+        content: null,
+        resourceId: null,
+        videoResourceId: null,
+        coverUrl: null,
+        videoUrl: null,
+        media: null,
+        status: 'READ',
+        createdAt: null,
+      ),
+    );
+    if (latestUnread.id <= 0) {
+      return;
     }
+    await markMessageRead(
+      workflow: workflow,
+      currentUserId: currentUserId,
+      message: latestUnread,
+    );
+    workflow.clearUnread(peerId);
   }
 
   Future<void> markMessageRead({
@@ -166,4 +229,3 @@ class ConversationFlow {
     return a.id.compareTo(b.id);
   }
 }
-

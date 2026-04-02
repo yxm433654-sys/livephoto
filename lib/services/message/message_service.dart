@@ -1,4 +1,4 @@
-import 'package:vox_flutter/models/message.dart';
+﻿import 'package:vox_flutter/models/message.dart';
 import 'package:vox_flutter/services/network/api_client.dart';
 
 class MessageService {
@@ -85,6 +85,29 @@ class MessageService {
         'type': 'DYNAMIC_PHOTO',
         'resourceId': coverId,
         'videoResourceId': videoId,
+      },
+      decode: (raw) => raw,
+    );
+    if (!res.success || res.data is! Map) {
+      throw Exception(res.message ?? 'Send failed');
+    }
+    return ((res.data as Map)['messageId'] as num).toInt();
+  }
+
+  Future<int> sendFile({
+    required int senderId,
+    required int receiverId,
+    required int resourceId,
+    required String fileName,
+  }) async {
+    final res = await _api.postJson<Object?>(
+      '/api/message/send',
+      body: {
+        'senderId': senderId,
+        'receiverId': receiverId,
+        'type': 'FILE',
+        'resourceId': resourceId,
+        'content': fileName,
       },
       decode: (raw) => raw,
     );

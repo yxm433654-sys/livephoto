@@ -1,4 +1,5 @@
 ﻿import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 class ConversationListItem extends StatelessWidget {
   const ConversationListItem({
@@ -10,6 +11,7 @@ class ConversationListItem extends StatelessWidget {
     required this.onTap,
     this.avatarUrl,
     this.subtitle,
+    this.updatedAt,
   });
 
   final String name;
@@ -19,6 +21,7 @@ class ConversationListItem extends StatelessWidget {
   final VoidCallback onTap;
   final String? avatarUrl;
   final String? subtitle;
+  final DateTime? updatedAt;
 
   @override
   Widget build(BuildContext context) {
@@ -46,14 +49,31 @@ class ConversationListItem extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        if (updatedAt != null) ...[
+                          const SizedBox(width: 10),
+                          Text(
+                            _formatTimestamp(updatedAt!),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF9CA3AF),
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -82,6 +102,17 @@ class ConversationListItem extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _formatTimestamp(DateTime value) {
+    final local = value.toLocal();
+    final now = DateTime.now();
+    final sameDay =
+        local.year == now.year && local.month == now.month && local.day == now.day;
+    if (sameDay) {
+      return DateFormat('HH:mm').format(local);
+    }
+    return DateFormat('MM/dd').format(local);
   }
 }
 

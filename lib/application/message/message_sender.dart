@@ -1,8 +1,9 @@
-﻿import 'dart:typed_data';
+﻿import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:vox_flutter/application/message/message_workflow_facade.dart';
-import 'package:vox_flutter/models/chat_media.dart';
 import 'package:vox_flutter/models/attachment_upload_response.dart';
+import 'package:vox_flutter/models/chat_media.dart';
 import 'package:vox_flutter/models/media_draft_metadata.dart';
 import 'package:vox_flutter/models/message.dart';
 import 'package:vox_flutter/ui/chat/local_message_factory.dart';
@@ -18,6 +19,8 @@ class MessageSender {
     required this.insertLocalMessage,
     required this.replaceMessage,
     required this.removeLocalMessage,
+    required this.getMessageById,
+    required this.getLocalPathByMessageId,
     required this.setSending,
     required this.showError,
   });
@@ -34,6 +37,8 @@ class MessageSender {
   }) insertLocalMessage;
   final void Function(int tempId, ChatMessage message) replaceMessage;
   final void Function(int tempId) removeLocalMessage;
+  final ChatMessage? Function(int messageId) getMessageById;
+  final String? Function(int messageId) getLocalPathByMessageId;
   final void Function(bool sending) setSending;
   final void Function(String message) showError;
 
@@ -65,15 +70,13 @@ class MessageSender {
         receiverId: peerId,
         content: trimmed,
       ),
-      buildResolvedMessage: (messageId) => _buildLocalMessage(
+      buildResolvedMessage: (_, messageId) => _buildLocalMessage(
         id: messageId,
         type: 'TEXT',
         content: trimmed,
         status: 'SENT',
       ),
-      onError: () {
-        onFailedRestore(trimmed);
-      },
+      onError: () => onFailedRestore(trimmed),
     );
   }
 
@@ -100,28 +103,7 @@ class MessageSender {
 
     await _runSend(
       tempId: tempId,
-      sendRemote: () async {
-        final upload = await workflow.uploadFileFromPath(
-          filePath: filePath,
-          userId: senderId,
-        );
-        final messageId = await workflow.sendImage(
-          senderId: senderId,
-          receiverId: peerId,
-          resourceId: upload.fileId!,
-        );
-        return _ResolvedSend(
-          message: _buildLocalMessage(
-            id: messageId,
-            type: 'IMAGE',
-            resourceId: upload.fileId,
-            coverUrl: upload.url,
-            videoUrl: upload.url,
-            media: _buildImageMedia(upload, metadata),
-            status: 'SENT',
-          ),
-        );
-      },
+      sendRemote: () => _uploadAndSendImage(filePath, metadata),
     );
   }
 
@@ -143,38 +125,12 @@ class MessageSender {
         status: 'SENDING',
       ),
       localCoverBytes: previewBytes,
+      localCoverPath: filePath,
     );
 
     await _runSend(
       tempId: tempId,
-      sendRemote: () async {
-        final upload = await workflow.uploadFileFromPath(
-          filePath: filePath,
-          userId: senderId,
-        );
-        final playId = upload.videoId ?? upload.fileId;
-        if (playId == null) {
-          throw Exception('视频上传后未返回资源 ID');
-        }
-        final messageId = await workflow.sendVideo(
-          senderId: senderId,
-          receiverId: peerId,
-          videoResourceId: playId,
-          coverResourceId: upload.coverId,
-        );
-        return _ResolvedSend(
-          message: _buildLocalMessage(
-            id: messageId,
-            type: 'VIDEO',
-            resourceId: upload.coverId,
-            videoResourceId: playId,
-            coverUrl: upload.coverUrl,
-            videoUrl: upload.videoUrl ?? upload.url,
-            media: _buildVideoMedia(upload, metadata),
-            status: 'SENT',
-          ),
-        );
-      },
+      sendRemote: () => _uploadAndSendVideo(filePath, metadata),
     );
   }
 
@@ -229,19 +185,144 @@ class MessageSender {
     );
   }
 
+  Future<void> sendFileFromPath({
+    required String filePath,
+    String? fileName,
+    int? fileSize,
+  }) async {
+    final tempId = nextTempId();
+    final resolvedName = _resolveFileName(filePath, fileName);
+    insertLocalMessage(
+      _buildLocalMessage(
+        id: tempId,
+        type: 'FILE',
+        content: resolvedName,
+        media: _buildFileMedia(filePath: filePath, size: fileSize),
+        status: 'SENDING',
+      ),
+      localCoverPath: filePath,
+    );
+
+    await _runSend(
+      tempId: tempId,
+      sendRemote: () => _uploadAndSendFile(filePath, resolvedName),
+    );
+  }
+
+  Future<void> retryMessage(ChatMessage message) async {
+    if (!message.isFailed) {
+      return;
+    }
+
+    replaceMessage(message.id, message.copyWith(status: 'SENDING'));
+    await _runSend(
+      tempId: message.id,
+      sendRemote: () => _retryRemote(message),
+      onError: () {
+        final latest = getMessageById(message.id);
+        if (latest != null && latest.type.toUpperCase() == 'TEXT') {
+          showError('发送失败，可以点击消息重试，或复制后重新发送。');
+        }
+      },
+    );
+  }
+
+  Future<Object> _retryRemote(ChatMessage message) async {
+    final type = message.type.toUpperCase();
+    switch (type) {
+      case 'TEXT':
+        return workflow.sendText(
+          senderId: senderId,
+          receiverId: peerId,
+          content: message.content ?? '',
+        );
+      case 'IMAGE':
+        final resourceId = message.resourceId ?? message.media?.resourceId;
+        if (resourceId != null) {
+          return workflow.sendImage(
+            senderId: senderId,
+            receiverId: peerId,
+            resourceId: resourceId,
+          );
+        }
+        final imagePath = getLocalPathByMessageId(message.id);
+        if (imagePath != null && imagePath.trim().isNotEmpty) {
+          return _uploadAndSendImage(imagePath, null);
+        }
+        throw Exception('无法重试这条图片消息，请重新选择图片。');
+      case 'VIDEO':
+        final playId = message.videoResourceId ?? message.media?.playResourceId;
+        if (playId != null) {
+          return workflow.sendVideo(
+            senderId: senderId,
+            receiverId: peerId,
+            videoResourceId: playId,
+            coverResourceId:
+                message.resourceId ?? message.media?.coverResourceId,
+          );
+        }
+        final videoPath = getLocalPathByMessageId(message.id);
+        if (videoPath != null && videoPath.trim().isNotEmpty) {
+          return _uploadAndSendVideo(videoPath, null);
+        }
+        throw Exception('无法重试这条视频消息，请重新选择视频。');
+      case 'DYNAMIC_PHOTO':
+        final coverId = message.resourceId ?? message.media?.coverResourceId;
+        final videoId = message.videoResourceId ?? message.media?.playResourceId;
+        if (coverId == null || videoId == null) {
+          throw Exception('无法重试这条动态照片，请重新选择动态照片。');
+        }
+        return workflow.sendDynamicPhoto(
+          senderId: senderId,
+          receiverId: peerId,
+          coverId: coverId,
+          videoId: videoId,
+        );
+      case 'FILE':
+        final fileResourceId = message.resourceId ?? message.media?.resourceId;
+        if (fileResourceId != null) {
+          return workflow.sendFile(
+            senderId: senderId,
+            receiverId: peerId,
+            resourceId: fileResourceId,
+            fileName: message.content ?? '文件',
+          );
+        }
+        final filePath = getLocalPathByMessageId(message.id);
+        if (filePath != null && filePath.trim().isNotEmpty) {
+          return _uploadAndSendFile(
+            filePath,
+            _resolveFileName(filePath, message.content),
+          );
+        }
+        throw Exception('无法重试这条文件消息，请重新选择文件。');
+      default:
+        throw Exception('暂不支持重试这种消息。');
+    }
+  }
+
   Future<void> _runSend({
     required int tempId,
     required Future<Object> Function() sendRemote,
-    ChatMessage Function(int messageId)? buildResolvedMessage,
+    ChatMessage Function(ChatMessage currentMessage, int messageId)?
+        buildResolvedMessage,
     void Function()? onError,
   }) async {
     setSending(true);
     try {
       final result = await sendRemote();
+      final currentMessage = getMessageById(tempId);
+      if (currentMessage == null) {
+        return;
+      }
+
       if (result is _ResolvedSend) {
         replaceMessage(tempId, result.message);
-      } else if (result is int && buildResolvedMessage != null) {
-        replaceMessage(tempId, buildResolvedMessage(result));
+      } else if (result is int) {
+        final resolvedMessage = buildResolvedMessage == null
+            ? currentMessage.copyWith(id: result, status: 'SENT')
+            : buildResolvedMessage(currentMessage, result);
+        replaceMessage(tempId, resolvedMessage);
       } else {
         throw Exception('Unsupported send result');
       }
@@ -249,12 +330,105 @@ class MessageSender {
         await workflow.refreshSessions();
       } catch (_) {}
     } catch (e) {
-      removeLocalMessage(tempId);
+      final failed = getMessageById(tempId);
+      if (failed != null) {
+        replaceMessage(tempId, failed.copyWith(status: 'FAILED'));
+      } else {
+        removeLocalMessage(tempId);
+      }
       onError?.call();
       showError(UserErrorMessage.from(e));
     } finally {
       setSending(false);
     }
+  }
+
+  Future<_ResolvedSend> _uploadAndSendImage(
+    String filePath,
+    MediaDraftMetadata? metadata,
+  ) async {
+    final upload = await workflow.uploadFileFromPath(
+      filePath: filePath,
+      userId: senderId,
+    );
+    final messageId = await workflow.sendImage(
+      senderId: senderId,
+      receiverId: peerId,
+      resourceId: upload.fileId!,
+    );
+    return _ResolvedSend(
+      message: _buildLocalMessage(
+        id: messageId,
+        type: 'IMAGE',
+        resourceId: upload.fileId,
+        coverUrl: upload.url,
+        videoUrl: upload.url,
+        media: _buildImageMedia(upload, metadata),
+        status: 'SENT',
+      ),
+    );
+  }
+
+  Future<_ResolvedSend> _uploadAndSendVideo(
+    String filePath,
+    MediaDraftMetadata? metadata,
+  ) async {
+    final upload = await workflow.uploadFileFromPath(
+      filePath: filePath,
+      userId: senderId,
+    );
+    final playId = upload.videoId ?? upload.fileId;
+    if (playId == null) {
+      throw Exception('视频上传后未返回资源 ID');
+    }
+    final messageId = await workflow.sendVideo(
+      senderId: senderId,
+      receiverId: peerId,
+      videoResourceId: playId,
+      coverResourceId: upload.coverId,
+    );
+    return _ResolvedSend(
+      message: _buildLocalMessage(
+        id: messageId,
+        type: 'VIDEO',
+        resourceId: upload.coverId,
+        videoResourceId: playId,
+        coverUrl: upload.coverUrl,
+        videoUrl: upload.videoUrl ?? upload.url,
+        media: _buildVideoMedia(upload, metadata),
+        status: 'SENT',
+      ),
+    );
+  }
+
+  Future<_ResolvedSend> _uploadAndSendFile(
+    String filePath,
+    String fileName,
+  ) async {
+    final upload = await workflow.uploadFileFromPath(
+      filePath: filePath,
+      userId: senderId,
+    );
+    final resourceId = upload.fileId;
+    if (resourceId == null) {
+      throw Exception('文件上传后未返回资源 ID');
+    }
+    final messageId = await workflow.sendFile(
+      senderId: senderId,
+      receiverId: peerId,
+      resourceId: resourceId,
+      fileName: fileName,
+    );
+    return _ResolvedSend(
+      message: _buildLocalMessage(
+        id: messageId,
+        type: 'FILE',
+        content: fileName,
+        resourceId: resourceId,
+        media: _buildUploadedFileMedia(upload),
+        status: 'SENT',
+      ),
+    );
   }
 
   ChatMessage _buildLocalMessage({
@@ -302,6 +476,43 @@ class MessageSender {
       aspectRatio:
           metadata?.aspectRatio(fallbackAspectRatio) ?? fallbackAspectRatio,
       sourceType: null,
+    );
+  }
+
+  ChatMedia _buildFileMedia({
+    required String filePath,
+    int? size,
+  }) {
+    return ChatMedia(
+      mediaKind: 'FILE',
+      processingStatus: 'PROCESSING',
+      resourceId: null,
+      coverResourceId: null,
+      playResourceId: null,
+      coverUrl: null,
+      playUrl: null,
+      width: null,
+      height: null,
+      duration: size?.toDouble(),
+      aspectRatio: null,
+      sourceType: _resolveFileExtension(filePath),
+    );
+  }
+
+  ChatMedia _buildUploadedFileMedia(AttachmentUploadResponse upload) {
+    return ChatMedia(
+      mediaKind: 'FILE',
+      processingStatus: 'READY',
+      resourceId: upload.fileId,
+      coverResourceId: upload.fileId,
+      playResourceId: upload.fileId,
+      coverUrl: upload.url,
+      playUrl: upload.url,
+      width: null,
+      height: null,
+      duration: upload.size?.toDouble(),
+      aspectRatio: null,
+      sourceType: upload.mimeType ?? upload.fileType,
     );
   }
 
@@ -382,6 +593,22 @@ class MessageSender {
     }
     return width / height;
   }
+
+  String _resolveFileName(String filePath, String? fallback) {
+    if (fallback != null && fallback.trim().isNotEmpty) {
+      return fallback.trim();
+    }
+    return filePath.split(Platform.pathSeparator).last;
+  }
+
+  String? _resolveFileExtension(String filePath) {
+    final fileName = _resolveFileName(filePath, null);
+    final dot = fileName.lastIndexOf('.');
+    if (dot < 0 || dot >= fileName.length - 1) {
+      return null;
+    }
+    return fileName.substring(dot + 1).toLowerCase();
+  }
 }
 
 class _ResolvedSend {
@@ -389,7 +616,3 @@ class _ResolvedSend {
 
   final ChatMessage message;
 }
-
-
-
-

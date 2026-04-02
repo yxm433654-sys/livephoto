@@ -24,6 +24,7 @@ class MessageBubble extends StatelessWidget {
     required this.urlResolver,
     this.localCoverBytes,
     this.localCoverPath,
+    this.onRetry,
   });
 
   final ChatMessage message;
@@ -39,6 +40,7 @@ class MessageBubble extends StatelessWidget {
   final MediaUrlResolver urlResolver;
   final Uint8List? localCoverBytes;
   final String? localCoverPath;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -46,9 +48,6 @@ class MessageBubble extends StatelessWidget {
     final mediaWidth = math.min(mq.size.width * 0.5, 244.0);
     final maxMediaHeight = math.min(mq.size.height * 0.34, 248.0);
     final bubble = _content(mediaWidth, maxMediaHeight);
-    final status = (message.status ?? '').toUpperCase();
-    final isMedia = _isMediaType(message.type);
-
     final avatar = _Avatar(
       name: isMine ? myName : peerName,
       avatarUrl: isMine ? myAvatarUrl : peerAvatarUrl,
@@ -60,10 +59,14 @@ class MessageBubble extends StatelessWidget {
           isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
       children: [
         bubble,
-        if (status == 'SENDING' && !isMedia)
-          const Padding(
-            padding: EdgeInsets.only(top: 6),
-            child: _InlineStatus(label: '发送中'),
+        if (_shouldShowFooterStatus)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: _StatusFooter(
+              label: _footerStatusLabel,
+              highlight: message.isFailed,
+              onTap: message.isFailed ? onRetry : null,
+            ),
           ),
       ],
     );
@@ -96,12 +99,22 @@ class MessageBubble extends StatelessWidget {
         normalized == 'DYNAMIC_PHOTO';
   }
 
+  bool get _isSending => (message.status ?? '').toUpperCase() == 'SENDING';
+  bool get _isFailed => message.isFailed;
+  bool get _isMedia => _isMediaType(message.type);
+  bool get _shouldShowFooterStatus => !_isMedia && (_isSending || _isFailed);
+  String get _footerStatusLabel => _isFailed ? 'Failed. Tap to retry' : 'Sending';
+
   Widget _content(double mediaWidth, double maxMediaHeight) {
     final type = message.type.toUpperCase();
     final media = message.media;
 
     if (type == 'TEXT') {
-      return _TextBubble(text: message.content ?? '', isMine: isMine);
+      return _TextBubble(
+        text: message.content ?? '',
+        isMine: isMine,
+        failed: _isFailed,
+      );
     }
     if (type == 'IMAGE') {
       return _imageBubble(mediaWidth, maxMediaHeight, media);
@@ -112,7 +125,14 @@ class MessageBubble extends StatelessWidget {
     if (type == 'DYNAMIC_PHOTO') {
       return _dynamicBubble(mediaWidth, maxMediaHeight, media);
     }
-    return _TextBubble(text: message.content ?? type, isMine: isMine);
+    if (type == 'FILE') {
+      return _fileBubble();
+    }
+    return _TextBubble(
+      text: message.content ?? type,
+      isMine: isMine,
+      failed: _isFailed,
+    );
   }
 
   Widget _imageBubble(
@@ -126,12 +146,13 @@ class MessageBubble extends StatelessWidget {
       aspectRatio: _resolveAspectRatio(media, fallback: 1.0),
     );
     final url = message.resolvedCoverUrl;
-    final sending = _isSending;
 
     return GestureDetector(
-      onTap: url == null || url.trim().isEmpty
-          ? null
-          : () => onPreviewImage(urlResolver.resolve(url)),
+      onTap: _isFailed
+          ? onRetry
+          : url == null || url.trim().isEmpty
+              ? null
+              : () => onPreviewImage(urlResolver.resolve(url)),
       child: _MediaCard(
         width: size.width,
         height: size.height,
@@ -139,11 +160,15 @@ class MessageBubble extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             _buildMediaImage(url: url, fit: BoxFit.cover),
-            if (sending)
+            if (_isSending)
               const Positioned(
                 left: 10,
                 bottom: 10,
-                child: _InlineStatus(label: '发送中'),
+                child: _InlineStatus(label: 'Sending'),
+              )
+            else if (_isFailed)
+              Positioned.fill(
+                child: _MediaRetryOverlay(onTap: onRetry),
               ),
           ],
         ),
@@ -163,13 +188,18 @@ class MessageBubble extends StatelessWidget {
     );
     final coverUrl = message.resolvedCoverUrl;
     final videoUrl = message.resolvedPlayUrl;
-    final processing = (media?.processingStatus ?? '').toUpperCase() == 'PROCESSING';
-    final sending = _isSending;
+    final processing =
+        (media?.processingStatus ?? '').toUpperCase() == 'PROCESSING';
 
     return GestureDetector(
-      onTap: sending || processing || videoUrl == null || videoUrl.trim().isEmpty
-          ? null
-          : () => onPlayVideo(urlResolver.resolve(videoUrl)),
+      onTap: _isFailed
+          ? onRetry
+          : _isSending ||
+                  processing ||
+                  videoUrl == null ||
+                  videoUrl.trim().isEmpty
+              ? null
+              : () => onPlayVideo(urlResolver.resolve(videoUrl)),
       child: _MediaCard(
         width: size.width,
         height: size.height,
@@ -184,19 +214,21 @@ class MessageBubble extends StatelessWidget {
                 bottom: 8,
                 child: _DurationBadge(label: durationLabel),
               ),
-            if (!processing && !sending)
+            if (!_isFailed && !processing && !_isSending)
               const Center(child: _PlayBadge()),
-            if (sending)
+            if (_isSending)
               const Positioned(
                 left: 10,
                 bottom: 10,
-                child: _InlineStatus(label: '发送中'),
+                child: _InlineStatus(label: 'Sending'),
               )
+            else if (_isFailed)
+              Positioned.fill(child: _MediaRetryOverlay(onTap: onRetry))
             else if (processing)
               const Positioned(
                 left: 10,
                 bottom: 10,
-                child: _InlineStatus(label: '处理中'),
+                child: _InlineStatus(label: 'Processing'),
               ),
           ],
         ),
@@ -216,23 +248,28 @@ class MessageBubble extends StatelessWidget {
     );
     final coverUrl = message.resolvedCoverUrl;
     final videoUrl = message.resolvedPlayUrl;
-    final processing = (media?.processingStatus ?? '').toUpperCase() == 'PROCESSING';
-    final sending = _isSending;
+    final processing =
+        (media?.processingStatus ?? '').toUpperCase() == 'PROCESSING';
 
     return GestureDetector(
-      onTap: sending || processing || videoUrl == null || videoUrl.trim().isEmpty
-          ? null
-          : () {
-              unawaited(
-                onOpenDynamicPhoto(
-                  coverUrl == null || coverUrl.trim().isEmpty
-                      ? ''
-                      : urlResolver.resolve(coverUrl),
-                  urlResolver.resolve(videoUrl),
-                  _resolveAspectRatio(media, fallback: 3 / 4),
-                ),
-              );
-            },
+      onTap: _isFailed
+          ? onRetry
+          : _isSending ||
+                  processing ||
+                  videoUrl == null ||
+                  videoUrl.trim().isEmpty
+              ? null
+              : () {
+                  unawaited(
+                    onOpenDynamicPhoto(
+                      coverUrl == null || coverUrl.trim().isEmpty
+                          ? ''
+                          : urlResolver.resolve(coverUrl),
+                      urlResolver.resolve(videoUrl),
+                      _resolveAspectRatio(media, fallback: 3 / 4),
+                    ),
+                  );
+                },
       child: _MediaCard(
         width: size.width,
         height: size.height,
@@ -246,17 +283,19 @@ class MessageBubble extends StatelessWidget {
               left: 8,
               child: _LiveBadge(),
             ),
-            if (sending)
+            if (_isSending)
               const Positioned(
                 left: 10,
                 bottom: 10,
-                child: _InlineStatus(label: '发送中'),
+                child: _InlineStatus(label: 'Sending'),
               )
+            else if (_isFailed)
+              Positioned.fill(child: _MediaRetryOverlay(onTap: onRetry))
             else if (processing)
               const Positioned(
                 left: 10,
                 bottom: 10,
-                child: _InlineStatus(label: '准备中'),
+                child: _InlineStatus(label: 'Preparing'),
               ),
           ],
         ),
@@ -264,7 +303,82 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  bool get _isSending => (message.status ?? '').toUpperCase() == 'SENDING';
+  Widget _fileBubble() {
+    final ext = (message.media?.sourceType ?? '').trim().toUpperCase();
+    final fileSizeBytes = message.media?.duration;
+    final title = (message.content ?? 'File').trim().isEmpty
+        ? 'File'
+        : message.content!.trim();
+    final subtitle = <String>[
+      if (ext.isNotEmpty) ext,
+      if (fileSizeBytes != null && fileSizeBytes > 0)
+        _formatFileSize(fileSizeBytes),
+    ].join('  |  ');
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 280),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isMine ? const Color(0xFFE8F7D8) : Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: _isFailed
+                ? const Color(0xFFF87171)
+                : const Color(0xFFE5E7EB),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: const Color(0xFFEEF2FF),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                Icons.insert_drive_file_rounded,
+                color: Color(0xFF4F46E5),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF111827),
+                    ),
+                  ),
+                  if (subtitle.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF6B7280),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Widget _buildMediaImage({
     required String? url,
@@ -293,7 +407,8 @@ class MessageBubble extends StatelessWidget {
     required double maxMediaHeight,
     required double aspectRatio,
   }) {
-    final safeRatio = aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 1.0;
+    final safeRatio =
+        aspectRatio.isFinite && aspectRatio > 0 ? aspectRatio : 1.0;
     var width = mediaWidth;
     var height = width / safeRatio;
     if (height > maxMediaHeight) {
@@ -316,8 +431,22 @@ class MessageBubble extends StatelessWidget {
     return fallback;
   }
 
+  String _formatFileSize(double bytes) {
+    const units = <String>['B', 'KB', 'MB', 'GB'];
+    var value = bytes;
+    var unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024;
+      unitIndex += 1;
+    }
+    final digits = value >= 100 || unitIndex == 0 ? 0 : 1;
+    return '${value.toStringAsFixed(digits)} ${units[unitIndex]}';
+  }
+
   String? _formatDuration(double? durationSeconds) {
-    if (durationSeconds == null || !durationSeconds.isFinite || durationSeconds <= 0) {
+    if (durationSeconds == null ||
+        !durationSeconds.isFinite ||
+        durationSeconds <= 0) {
       return null;
     }
     final totalSeconds = durationSeconds.round();
@@ -328,17 +457,24 @@ class MessageBubble extends StatelessWidget {
 }
 
 class _TextBubble extends StatelessWidget {
-  const _TextBubble({required this.text, required this.isMine});
+  const _TextBubble({
+    required this.text,
+    required this.isMine,
+    required this.failed,
+  });
 
   final String text;
   final bool isMine;
+  final bool failed;
 
   @override
   Widget build(BuildContext context) {
     final bg = isMine ? const Color(0xFF95EC69) : Colors.white;
-    final border = isMine
-        ? Border.all(color: Colors.transparent)
-        : Border.all(color: const Color(0xFFE5E7EB));
+    final borderColor = failed
+        ? const Color(0xFFF87171)
+        : isMine
+            ? Colors.transparent
+            : const Color(0xFFE5E7EB);
     return ConstrainedBox(
       constraints: BoxConstraints(
         maxWidth: math.min(MediaQuery.of(context).size.width * 0.68, 320.0),
@@ -347,7 +483,7 @@ class _TextBubble extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: bg,
-          border: border,
+          border: Border.all(color: borderColor),
           borderRadius: BorderRadius.circular(14),
         ),
         child: Text(
@@ -423,6 +559,7 @@ class _MediaCard extends StatelessWidget {
     );
   }
 }
+
 class _MediaShade extends StatelessWidget {
   const _MediaShade();
 
@@ -468,6 +605,7 @@ class _NeutralPlaceholder extends StatelessWidget {
     );
   }
 }
+
 class _PlayBadge extends StatelessWidget {
   const _PlayBadge();
 
@@ -539,6 +677,68 @@ class _InlineStatus extends StatelessWidget {
   }
 }
 
+class _StatusFooter extends StatelessWidget {
+  const _StatusFooter({
+    required this.label,
+    required this.highlight,
+    this.onTap,
+  });
+
+  final String label;
+  final bool highlight;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Text(
+      label,
+      style: TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+        color: highlight ? const Color(0xFFDC2626) : const Color(0xFF6B7280),
+      ),
+    );
+    if (onTap == null) {
+      return text;
+    }
+    return GestureDetector(onTap: onTap, child: text);
+  }
+}
+
+class _MediaRetryOverlay extends StatelessWidget {
+  const _MediaRetryOverlay({this.onTap});
+
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0x99000000),
+      child: InkWell(
+        onTap: onTap,
+        child: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.refresh_rounded, color: Colors.white, size: 28),
+              SizedBox(height: 6),
+              Text(
+                'Failed\nTap to retry',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _LiveBadge extends StatelessWidget {
   const _LiveBadge();
 
@@ -573,6 +773,3 @@ class _LiveBadge extends StatelessWidget {
     );
   }
 }
-
-
-
