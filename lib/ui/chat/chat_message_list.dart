@@ -25,6 +25,8 @@ class ChatMessageList extends StatelessWidget {
     required this.localCoverPathByMessageId,
     required this.urlResolver,
     required this.onRetryMessage,
+    required this.onOpenFileMessage,
+    required this.onShowMessageActions,
   });
 
   final bool loading;
@@ -45,6 +47,8 @@ class ChatMessageList extends StatelessWidget {
   final Map<int, String> localCoverPathByMessageId;
   final MediaUrlResolver urlResolver;
   final void Function(ChatMessage message) onRetryMessage;
+  final Future<void> Function(ChatMessage message) onOpenFileMessage;
+  final Future<void> Function(ChatMessage message) onShowMessageActions;
 
   @override
   Widget build(BuildContext context) {
@@ -101,6 +105,8 @@ class ChatMessageList extends StatelessWidget {
               onRetry: isMine && message.isFailed
                   ? () => onRetryMessage(message)
                   : null,
+              onOpenFile: () => onOpenFileMessage(message),
+              onLongPress: () => onShowMessageActions(message),
             ),
           ],
         );

@@ -38,23 +38,31 @@ class ChatMediaActionHandler {
 
   Future<void> showAttachMenu() async {
     final action = await ChatMediaPicker.showAttachMenu(context);
-    if (action != null) {
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+    if (action == null) {
+      return;
     }
-    switch (action) {
-      case ChatAttachAction.galleryImage:
+
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    if (action == ChatAttachAction.file) {
+      await pickFiles();
+      return;
+    }
+
+    final mediaAction = await ChatMediaPicker.showMediaMenu(context);
+    if (mediaAction == null) {
+      return;
+    }
+
+    await Future<void>.delayed(const Duration(milliseconds: 120));
+    switch (mediaAction) {
+      case ChatMediaEntryAction.image:
         await pickGalleryImage();
         break;
-      case ChatAttachAction.galleryVideo:
+      case ChatMediaEntryAction.video:
         await pickGalleryVideo();
         break;
-      case ChatAttachAction.livePhoto:
+      case ChatMediaEntryAction.livePhoto:
         await pickGalleryDynamicPhoto();
-        break;
-      case ChatAttachAction.file:
-        await pickFiles();
-        break;
-      case null:
         break;
     }
   }

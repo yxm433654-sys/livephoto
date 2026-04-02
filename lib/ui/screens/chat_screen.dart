@@ -17,6 +17,8 @@ import 'package:vox_flutter/ui/chat/dynamic_photo_adapter.dart';
 import 'package:vox_flutter/ui/chat/local_message_factory.dart';
 import 'package:vox_flutter/ui/chat/message_list.dart';
 import 'package:vox_flutter/ui/chat/message_sender.dart';
+import 'package:vox_flutter/utils/hidden_message_store.dart';
+import 'package:vox_flutter/utils/message_attachment_actions.dart';
 import 'package:vox_flutter/utils/user_error_message.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -42,6 +44,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<ChatMessage> _messages = <ChatMessage>[];
   final Map<int, Uint8List> _localCoverBytesByMessageId = <int, Uint8List>{};
   final Map<int, String> _localCoverPathByMessageId = <int, String>{};
+  final Set<int> _hiddenMessageIds = <int>{};
 
   ChatMediaNavigator? _chatMediaNavigator;
   MessageWorkflowFacade? _workflowFacade;
@@ -127,15 +130,23 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
+    final hiddenIds = await HiddenMessageStore.load(
+      currentUserId: session.userId,
+      peerId: widget.peerId,
+    );
+
     final conversationState = await _conversationFlow.initialize(
       workflow: workflow,
       currentUserId: session.userId,
       peerId: widget.peerId,
     );
 
+    _hiddenMessageIds
+      ..clear()
+      ..addAll(hiddenIds);
     _messages
       ..clear()
-      ..addAll(conversationState.messages);
+      ..addAll(_filterHiddenMessages(conversationState.messages));
     _lastMessageId = conversationState.lastMessageId;
     _currentPage = conversationState.currentPage;
     _hasMoreHistory = conversationState.hasMore;
@@ -186,7 +197,7 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {
         _messages
           ..clear()
-          ..addAll(nextState.messages);
+          ..addAll(_filterHiddenMessages(nextState.messages));
         _currentPage = nextState.currentPage;
         _hasMoreHistory = nextState.hasMore;
       });
@@ -238,7 +249,7 @@ class _ChatScreenState extends State<ChatScreen> {
         setState(() {
           _messages
             ..clear()
-            ..addAll(update.conversationUpdate.messages);
+            ..addAll(_filterHiddenMessages(update.conversationUpdate.messages));
           if (update.conversationUpdate.lastMessageId > _lastMessageId) {
             _lastMessageId = update.conversationUpdate.lastMessageId;
           }
@@ -540,6 +551,14 @@ class _ChatScreenState extends State<ChatScreen> {
     return _localCoverPathByMessageId[id];
   }
 
+
+  List<ChatMessage> _filterHiddenMessages(List<ChatMessage> messages) {
+    if (_hiddenMessageIds.isEmpty) {
+      return List<ChatMessage>.from(messages);
+    }
+    return messages.where((message) => !_hiddenMessageIds.contains(message.id)).toList();
+  }
+
   bool _needsProcessingRefresh(ChatMessage message) {
     final type = message.type.toUpperCase();
     if (type != 'VIDEO' && type != 'DYNAMIC_PHOTO') {
@@ -617,6 +636,100 @@ class _ChatScreenState extends State<ChatScreen> {
         current.media?.coverUrl != updated.media?.coverUrl ||
         current.media?.playUrl != updated.media?.playUrl ||
         current.media?.sourceType != updated.media?.sourceType;
+  }
+
+
+  Future<void> _openFileMessage(ChatMessage message) async {
+    try {
+      await MessageAttachmentActions.openFileMessage(
+        message: message,
+        urlResolver: MediaUrlResolver(context.read<AppState>().apiBaseUrl),
+      );
+    } catch (error) {
+      _showSnack(UserErrorMessage.from(error));
+    }
+  }
+
+  Future<void> _showMessageActions(ChatMessage message) async {
+    final session = context.read<AppState>().session;
+    if (session == null) {
+      return;
+    }
+
+    final canSave = const <String>{'IMAGE', 'VIDEO', 'DYNAMIC_PHOTO', 'FILE'}
+        .contains(message.type.toUpperCase());
+    final action = await showModalBottomSheet<_MessageAction>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (canSave)
+                ListTile(
+                  leading: const Icon(Icons.download_rounded),
+                  title: const Text('Save to device'),
+                  onTap: () => Navigator.of(sheetContext).pop(_MessageAction.saveLocal),
+                ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded),
+                title: const Text('Delete'),
+                subtitle: const Text('Hide on this device only. This does not affect the other user or the server history.'),
+                onTap: () => Navigator.of(sheetContext).pop(_MessageAction.deleteLocal),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+
+    switch (action) {
+      case _MessageAction.saveLocal:
+        await _saveMessageLocally(message);
+        break;
+      case _MessageAction.deleteLocal:
+        await _deleteMessageLocally(session.userId, message);
+        break;
+      case null:
+        break;
+    }
+  }
+
+  Future<void> _saveMessageLocally(ChatMessage message) async {
+    try {
+      final notice = await MessageAttachmentActions.saveToLocal(
+        message: message,
+        urlResolver: MediaUrlResolver(context.read<AppState>().apiBaseUrl),
+      );
+      _showSnack(notice);
+    } catch (error) {
+      _showSnack(UserErrorMessage.from(error));
+    }
+  }
+
+  Future<void> _deleteMessageLocally(int currentUserId, ChatMessage message) async {
+    await HiddenMessageStore.hide(
+      currentUserId: currentUserId,
+      peerId: widget.peerId,
+      messageId: message.id,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _hiddenMessageIds.add(message.id);
+      _messages.removeWhere((item) => item.id == message.id);
+      _localCoverBytesByMessageId.remove(message.id);
+      _localCoverPathByMessageId.remove(message.id);
+    });
+    _syncProcessingRefreshTimer();
+    _showSnack('Hidden on this device only. This does not affect the other user or the server history.');
   }
 
   Future<void> _retryMessage(ChatMessage message) async {
@@ -852,6 +965,8 @@ class _ChatScreenState extends State<ChatScreen> {
               localCoverPathByMessageId: _localCoverPathByMessageId,
               urlResolver: urlResolver,
               onRetryMessage: _retryMessage,
+              onOpenFileMessage: _openFileMessage,
+              onShowMessageActions: _showMessageActions,
             ),
           ),
           ChatComposer(
@@ -872,6 +987,7 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 
 enum _ChatAction { clearConversation, clearCache }
+enum _MessageAction { saveLocal, deleteLocal }
 
 const List<String> _emojiSet = <String>[
   '😀',

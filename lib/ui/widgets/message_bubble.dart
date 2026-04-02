@@ -25,6 +25,8 @@ class MessageBubble extends StatelessWidget {
     this.localCoverBytes,
     this.localCoverPath,
     this.onRetry,
+    this.onOpenFile,
+    this.onLongPress,
   });
 
   final ChatMessage message;
@@ -41,6 +43,8 @@ class MessageBubble extends StatelessWidget {
   final Uint8List? localCoverBytes;
   final String? localCoverPath;
   final VoidCallback? onRetry;
+  final VoidCallback? onOpenFile;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -73,7 +77,10 @@ class MessageBubble extends StatelessWidget {
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onLongPress: onLongPress,
+        child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment:
             isMine ? MainAxisAlignment.end : MainAxisAlignment.start,
@@ -88,6 +95,7 @@ class MessageBubble extends StatelessWidget {
                 const SizedBox(width: 8),
                 Flexible(child: column),
               ],
+      ),
       ),
     );
   }
@@ -315,66 +323,69 @@ class MessageBubble extends StatelessWidget {
         _formatFileSize(fileSizeBytes),
     ].join('  |  ');
 
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 280),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: isMine ? const Color(0xFFE8F7D8) : Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: _isFailed
-                ? const Color(0xFFF87171)
-                : const Color(0xFFE5E7EB),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: const Color(0xFFEEF2FF),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(
-                Icons.insert_drive_file_rounded,
-                color: Color(0xFF4F46E5),
-              ),
+    return GestureDetector(
+      onTap: _isFailed ? onRetry : onOpenFile,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 280),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isMine ? const Color(0xFFE8F7D8) : Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: _isFailed
+                  ? const Color(0xFFF87171)
+                  : const Color(0xFFE5E7EB),
             ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF111827),
-                    ),
-                  ),
-                  if (subtitle.isNotEmpty) ...[
-                    const SizedBox(height: 4),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEEF2FF),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(
+                  Icons.insert_drive_file_rounded,
+                  color: Color(0xFF4F46E5),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
                     Text(
-                      subtitle,
-                      maxLines: 1,
+                      title,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF6B7280),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF111827),
                       ),
                     ),
+                    if (subtitle.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF6B7280),
+                        ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -475,7 +486,9 @@ class _TextBubble extends StatelessWidget {
         : isMine
             ? Colors.transparent
             : const Color(0xFFE5E7EB);
-    return ConstrainedBox(
+    return GestureDetector(
+      onTap: _isFailed ? onRetry : onOpenFile,
+      child: ConstrainedBox(
       constraints: BoxConstraints(
         maxWidth: math.min(MediaQuery.of(context).size.width * 0.68, 320.0),
       ),

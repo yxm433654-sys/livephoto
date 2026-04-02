@@ -6,10 +6,14 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:vox_flutter/utils/dynamic_photo_detector.dart';
 
 enum ChatAttachAction {
-  galleryImage,
-  galleryVideo,
-  livePhoto,
+  media,
   file,
+}
+
+enum ChatMediaEntryAction {
+  image,
+  video,
+  livePhoto,
 }
 
 enum ChatAssetPickerMode {
@@ -28,74 +32,114 @@ class ChatMediaPicker {
   static Future<ChatAttachAction?> showAttachMenu(BuildContext context) {
     return showModalBottomSheet<ChatAttachAction>(
       context: context,
-      backgroundColor: const Color(0xFFF7F8FA),
+      backgroundColor: Colors.white,
+      showDragHandle: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
       ),
       builder: (sheetContext) {
         return SafeArea(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  '发送内容',
-                  style: TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  'Send',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 8),
                 const Text(
-                  '图片、视频和文件最多可选 9 项；图片单张建议不超过 20MB，视频、动态照片和普通文件建议不超过 256MB。',
+                  'Images are best under 20MB each. Videos, live photos, and files are best under 256MB.',
                   style: TextStyle(
                     fontSize: 12,
                     color: Color(0xFF6B7280),
                     height: 1.4,
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    _AttachTile(
+                      icon: Icons.photo_library_outlined,
+                      label: 'Media',
+                      color: const Color(0xFFE0F2FE),
+                      iconColor: const Color(0xFF0284C7),
+                      onTap: () => Navigator.of(sheetContext).pop(ChatAttachAction.media),
+                    ),
+                    const SizedBox(width: 14),
+                    _AttachTile(
+                      icon: Icons.attach_file_rounded,
+                      label: 'Files',
+                      color: const Color(0xFFF3E8FF),
+                      iconColor: const Color(0xFF7C3AED),
+                      onTap: () => Navigator.of(sheetContext).pop(ChatAttachAction.file),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  static Future<ChatMediaEntryAction?> showMediaMenu(BuildContext context) {
+    return showModalBottomSheet<ChatMediaEntryAction>(
+      context: context,
+      backgroundColor: Colors.white,
+      showDragHandle: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Choose media',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'You can choose up to 9 images or videos. Live photos are selected one at a time.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF6B7280),
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 18),
                 Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
+                  spacing: 14,
+                  runSpacing: 14,
                   children: [
                     _AttachTile(
                       icon: Icons.image_outlined,
-                      label: '图片',
+                      label: 'Image',
                       color: const Color(0xFFE0F2FE),
                       iconColor: const Color(0xFF0284C7),
-                      onTap: () => Navigator.of(sheetContext).pop(
-                        ChatAttachAction.galleryImage,
-                      ),
+                      onTap: () => Navigator.of(sheetContext).pop(ChatMediaEntryAction.image),
                     ),
                     _AttachTile(
                       icon: Icons.smart_display_outlined,
-                      label: '视频',
+                      label: 'Video',
                       color: const Color(0xFFDCFCE7),
                       iconColor: const Color(0xFF16A34A),
-                      onTap: () => Navigator.of(sheetContext).pop(
-                        ChatAttachAction.galleryVideo,
-                      ),
+                      onTap: () => Navigator.of(sheetContext).pop(ChatMediaEntryAction.video),
                     ),
                     _AttachTile(
                       icon: Icons.motion_photos_on_outlined,
-                      label: '动态照片',
+                      label: 'Live',
                       color: const Color(0xFFFCE7F3),
                       iconColor: const Color(0xFFDB2777),
-                      onTap: () => Navigator.of(sheetContext).pop(
-                        ChatAttachAction.livePhoto,
-                      ),
-                    ),
-                    _AttachTile(
-                      icon: Icons.attach_file_rounded,
-                      label: '文件',
-                      color: const Color(0xFFF3E8FF),
-                      iconColor: const Color(0xFF7C3AED),
-                      onTap: () => Navigator.of(sheetContext).pop(
-                        ChatAttachAction.file,
-                      ),
+                      onTap: () => Navigator.of(sheetContext).pop(ChatMediaEntryAction.livePhoto),
                     ),
                   ],
                 ),
@@ -140,7 +184,7 @@ class ChatMediaPicker {
         );
       },
     );
-    return result ?? const <AssetEntity>[];
+    return result Live const <AssetEntity>[];
   }
 
   static Future<AssetEntity?> pickAsset({
@@ -321,7 +365,7 @@ class _AssetPickerSheetState extends State<_AssetPickerSheet> {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final assets = snapshot.data ?? const <AssetEntity>[];
+        final assets = snapshot.data Live const <AssetEntity>[];
         if (assets.isEmpty) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!context.mounted) {
