@@ -120,7 +120,7 @@ class MessageSender {
         media: _buildPlaceholderMedia(
           mediaKind: 'VIDEO',
           metadata: metadata,
-          fallbackAspectRatio: 9 / 16,
+          fallbackAspectRatio: 16 / 9,
         ),
         status: 'SENDING',
       ),
@@ -581,7 +581,7 @@ class MessageSender {
       height: height,
       duration: upload.duration ?? metadata?.durationSeconds,
       aspectRatio:
-          _aspectRatio(width, height, metadata?.aspectRatio(9 / 16) ?? 9 / 16),
+          _aspectRatio(width, height, metadata?.aspectRatio(16 / 9) ?? 16 / 9),
       sourceType: upload.sourceType,
     );
   }

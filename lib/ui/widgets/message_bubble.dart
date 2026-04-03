@@ -184,11 +184,12 @@ class MessageBubble extends StatelessWidget {
     final videoUrl = message.resolvedPlayUrl;
     final processing =
         (media?.processingStatus ?? '').toUpperCase() == 'PROCESSING';
+    final hasPlayableVideo = videoUrl != null && videoUrl.trim().isNotEmpty;
 
     return GestureDetector(
       onTap: _isFailed
           ? onRetry
-          : _isSending || processing || videoUrl == null || videoUrl.trim().isEmpty
+          : _isSending || !hasPlayableVideo
               ? null
               : () => onPlayVideo(urlResolver.resolve(videoUrl)),
       child: _MediaCard(
@@ -205,7 +206,7 @@ class MessageBubble extends StatelessWidget {
                 bottom: 8,
                 child: _DurationBadge(label: durationLabel),
               ),
-            if (!_isFailed && !processing && !_isSending)
+            if (!_isFailed && hasPlayableVideo && !_isSending)
               const Center(child: _PlayBadge()),
             if (_isSending)
               const Positioned(
@@ -215,7 +216,7 @@ class MessageBubble extends StatelessWidget {
               )
             else if (_isFailed)
               Positioned.fill(child: _MediaRetryOverlay(onTap: onRetry))
-            else if (processing)
+            else if (processing && !hasPlayableVideo)
               const Positioned(
                 left: 10,
                 bottom: 10,
