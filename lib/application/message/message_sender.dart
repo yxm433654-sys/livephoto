@@ -326,9 +326,6 @@ class MessageSender {
       } else {
         throw Exception('Unsupported send result');
       }
-      try {
-        await workflow.refreshSessions();
-      } catch (_) {}
     } catch (e) {
       final failed = getMessageById(tempId);
       if (failed != null) {
@@ -351,6 +348,31 @@ class MessageSender {
       filePath: filePath,
       userId: senderId,
     );
+    if ((upload.fileType ?? '').toUpperCase() == 'DYNAMIC_PHOTO') {
+      final coverId = upload.coverId;
+      final videoId = upload.videoId;
+      if (coverId == null || videoId == null) {
+        throw Exception('动态照片上传后未返回完整资源');
+      }
+      final messageId = await workflow.sendDynamicPhoto(
+        senderId: senderId,
+        receiverId: peerId,
+        coverId: coverId,
+        videoId: videoId,
+      );
+      return _ResolvedSend(
+        message: _buildLocalMessage(
+          id: messageId,
+          type: 'DYNAMIC_PHOTO',
+          resourceId: coverId,
+          videoResourceId: videoId,
+          coverUrl: upload.coverUrl,
+          videoUrl: upload.videoUrl,
+          media: _buildDynamicMedia(upload, metadata),
+          status: 'SENT',
+        ),
+      );
+    }
     final messageId = await workflow.sendImage(
       senderId: senderId,
       receiverId: peerId,

@@ -47,6 +47,11 @@ class UserErrorMessage {
       return '暂不支持这种媒体格式，请换一个文件试试。';
     }
 
+    if (lower.contains('uploader userid not found') ||
+        lower.contains('userid not found')) {
+      return '当前登录状态已经失效，请重新登录后再上传。';
+    }
+
     if (normalized.isEmpty) {
       return '操作失败，请稍后重试。';
     }

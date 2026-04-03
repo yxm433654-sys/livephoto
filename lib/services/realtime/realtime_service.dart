@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:vox_flutter/models/message.dart';
+import 'package:vox_flutter/models/chat_session_summary.dart';
 import 'package:vox_flutter/services/message/message_service.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -23,7 +24,8 @@ class RealtimeService {
     required String token,
     required int lastMessageId,
     required void Function(ChatMessage message) onMessage,
-    required void Function() onSessionChanged,
+    required void Function(ChatSessionSummary summary) onSessionUpdated,
+    required void Function() onSessionListChanged,
     required void Function(int messageId) onMessageRead,
     required void Function(Object error) onError,
   }) {
@@ -46,8 +48,13 @@ class RealtimeService {
               case 'NEW_MESSAGE':
                 final msg = ChatMessage.fromJson(data);
                 _ingestMessage(msg, onMessage);
-              case 'SESSION_UPDATED' || 'SESSION_LIST_CHANGED':
-                onSessionChanged();
+              case 'SESSION_UPDATED':
+                final summary = ChatSessionSummary.fromJson(data);
+                if (summary != null) {
+                  onSessionUpdated(summary);
+                }
+              case 'SESSION_LIST_CHANGED':
+                onSessionListChanged();
               case 'READ_RECEIPT':
                 // Server tells us one of our sent messages was read.
                 final messageId = data is Map ? data['messageId'] : null;

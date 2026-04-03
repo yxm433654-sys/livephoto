@@ -99,8 +99,17 @@ class _SessionListScreenState extends State<SessionListScreen> {
       color: Colors.white,
       elevation: 12,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      items: const [
+      items: [
         PopupMenuItem<String>(
+          enabled: false,
+          height: 64,
+          child: _ConversationMenuAccount(
+            username: sessionList.currentUsername,
+            userId: sessionList.currentUserId,
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
           value: 'add',
           child: _ConversationMenuRow(
             icon: Icons.add_comment_outlined,
@@ -195,68 +204,11 @@ class _SessionListScreenState extends State<SessionListScreen> {
                 ),
               ],
             ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFFE5E7EB)),
-              ),
-              child: Row(
-                children: [
-                  avatarUrl == null
-                      ? CircleAvatar(
-                          radius: 20,
-                          backgroundColor: _avatarColor(userId),
-                          child: Text(
-                            _avatarText(username, userId),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        )
-                      : CircleAvatar(
-                          radius: 20,
-                          backgroundImage: NetworkImage(avatarUrl),
-                        ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          username,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF111827),
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'ID $userId',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Color(0xFF6B7280),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
           Expanded(
             child: sessionItems.isEmpty
                 ? const _EmptyConversationState()
                 : ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
                     itemCount: sessionItems.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (context, index) {
@@ -321,6 +273,44 @@ class _ConversationMenuRow extends StatelessWidget {
         Icon(icon, size: 18, color: const Color(0xFF111827)),
         const SizedBox(width: 10),
         Text(label),
+      ],
+    );
+  }
+}
+
+class _ConversationMenuAccount extends StatelessWidget {
+  const _ConversationMenuAccount({
+    required this.username,
+    required this.userId,
+  });
+
+  final String username;
+  final int userId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          username,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF111827),
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          'ID $userId',
+          style: const TextStyle(
+            fontSize: 12,
+            color: Color(0xFF6B7280),
+          ),
+        ),
       ],
     );
   }

@@ -75,17 +75,7 @@ class SessionDirectory {
   }
 
   void rememberSessionSummaries(List<ChatSessionSummary> items) {
-    final sortedItems = List<ChatSessionSummary>.from(items)
-      ..sort((a, b) {
-        final aTime = a.updatedAt?.millisecondsSinceEpoch ?? 0;
-        final bTime = b.updatedAt?.millisecondsSinceEpoch ?? 0;
-        if (aTime != bTime) {
-          return bTime.compareTo(aTime);
-        }
-        final aMessageId = a.lastMessageId ?? 0;
-        final bMessageId = b.lastMessageId ?? 0;
-        return bMessageId.compareTo(aMessageId);
-      });
+    final sortedItems = _sortSummaries(items);
     conversationSummaries = sortedItems;
     for (final item in sortedItems) {
       _unreadByPeer[item.peerId] = item.unreadCount;
@@ -100,6 +90,18 @@ class SessionDirectory {
           createdAt: cached?.createdAt,
         );
       }
+    }
+  }
+
+  void upsertSessionSummary(ChatSessionSummary item) {
+    final nextItems = <ChatSessionSummary>[
+      for (final current in conversationSummaries)
+        if (current.peerId != item.peerId) current,
+      item,
+    ];
+    rememberSessionSummaries(nextItems);
+    if (!peers.contains(item.peerId)) {
+      peers = [...peers, item.peerId];
     }
   }
 
@@ -138,6 +140,21 @@ class SessionDirectory {
     clearSessionState();
     _userCache.clear();
     _userFetches.clear();
+  }
+
+  List<ChatSessionSummary> _sortSummaries(Iterable<ChatSessionSummary> items) {
+    final sortedItems = List<ChatSessionSummary>.from(items)
+      ..sort((a, b) {
+        final aTime = a.updatedAt?.millisecondsSinceEpoch ?? 0;
+        final bTime = b.updatedAt?.millisecondsSinceEpoch ?? 0;
+        if (aTime != bTime) {
+          return bTime.compareTo(aTime);
+        }
+        final aMessageId = a.lastMessageId ?? 0;
+        final bMessageId = b.lastMessageId ?? 0;
+        return bMessageId.compareTo(aMessageId);
+      });
+    return sortedItems;
   }
 }
 

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:vox_flutter/application/session/session_directory.dart';
+import 'package:vox_flutter/models/chat_session_summary.dart';
 import 'package:vox_flutter/models/message.dart';
 import 'package:vox_flutter/models/session.dart';
 import 'package:vox_flutter/services/message/message_service.dart';
@@ -56,7 +57,12 @@ class RealtimeConnectionCoordinator {
           }
         }
       },
-      onSessionChanged: refreshSessions,
+      onSessionUpdated: (summary) async {
+        await ensurePeer(summary.peerId);
+        sessionDirectory.upsertSessionSummary(summary);
+        notifyListeners();
+      },
+      onSessionListChanged: refreshSessions,
       onMessageRead: (_) {
         notifyListeners();
       },

@@ -3,7 +3,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:vox_flutter/utils/dynamic_photo_detector.dart';
 
 enum ChatAttachAction {
   media,
@@ -160,10 +159,7 @@ class ChatMediaPicker {
     }
 
     if (Platform.isAndroid) {
-      final isDynamic = await DynamicPhotoDetector.detectAndroidMotionPhoto(asset);
-      return isDynamic
-          ? ChatPickedAssetKind.dynamicPhoto
-          : ChatPickedAssetKind.image;
+      return ChatPickedAssetKind.image;
     }
 
     return ChatPickedAssetKind.image;
