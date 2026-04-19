@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:vox_flutter/utils/dynamic_photo_detector.dart';
 
 enum ChatAttachAction {
   media,
@@ -181,6 +182,9 @@ class _MixedAssetPickerSheetState extends State<_MixedAssetPickerSheet> {
   final List<ChatPickedAsset> _selected = <ChatPickedAsset>[];
   final Map<String, Future<Uint8List?>> _thumbnailFutures =
       <String, Future<Uint8List?>>{};
+  final Map<String, ChatPickedAssetKind> _resolvedKinds =
+      <String, ChatPickedAssetKind>{};
+  final Set<String> _resolvingAssetIds = <String>{};
   late final Future<List<ChatPickedAsset>> _assetsFuture;
 
   @override
@@ -200,7 +204,29 @@ class _MixedAssetPickerSheetState extends State<_MixedAssetPickerSheet> {
     return _selected.any((item) => item.asset.id == asset.asset.id);
   }
 
-  void _toggle(ChatPickedAsset asset) {
+  ChatPickedAssetKind _effectiveKind(ChatPickedAsset asset) {
+    return _resolvedKinds[asset.asset.id] ?? asset.kind;
+  }
+
+  Future<ChatPickedAsset> _resolveSelectionKind(ChatPickedAsset asset) async {
+    final cachedKind = _resolvedKinds[asset.asset.id];
+    if (cachedKind != null) {
+      return ChatPickedAsset(asset: asset.asset, kind: cachedKind);
+    }
+    if (!Platform.isAndroid || asset.kind != ChatPickedAssetKind.image) {
+      return asset;
+    }
+
+    final isMotionPhoto =
+        await DynamicPhotoDetector.detectAndroidMotionPhoto(asset.asset);
+    final kind = isMotionPhoto
+        ? ChatPickedAssetKind.dynamicPhoto
+        : ChatPickedAssetKind.image;
+    _resolvedKinds[asset.asset.id] = kind;
+    return ChatPickedAsset(asset: asset.asset, kind: kind);
+  }
+
+  Future<void> _toggle(ChatPickedAsset asset) async {
     final existingIndex = _selected.indexWhere(
       (item) => item.asset.id == asset.asset.id,
     );
@@ -216,8 +242,27 @@ class _MixedAssetPickerSheetState extends State<_MixedAssetPickerSheet> {
       return;
     }
 
+    if (_resolvingAssetIds.contains(asset.asset.id)) {
+      return;
+    }
+
     setState(() {
-      _selected.add(asset);
+      _resolvingAssetIds.add(asset.asset.id);
+    });
+
+    final resolvedAsset = await _resolveSelectionKind(asset);
+    if (!mounted) {
+      return;
+    }
+
+    final latestIndex = _selected.indexWhere(
+      (item) => item.asset.id == asset.asset.id,
+    );
+    setState(() {
+      _resolvingAssetIds.remove(asset.asset.id);
+      if (latestIndex < 0) {
+        _selected.add(resolvedAsset);
+      }
     });
   }
 
@@ -281,11 +326,14 @@ class _MixedAssetPickerSheetState extends State<_MixedAssetPickerSheet> {
                 itemCount: assets.length,
                 itemBuilder: (_, index) {
                   final item = assets[index];
+                  final effectiveKind = _effectiveKind(item);
                   final selectedIndex = _selected.indexWhere(
                     (selected) => selected.asset.id == item.asset.id,
                   );
                   return GestureDetector(
-                    onTap: () => _toggle(item),
+                    onTap: () {
+                      _toggle(item);
+                    },
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(8),
                       child: Stack(
@@ -294,7 +342,7 @@ class _MixedAssetPickerSheetState extends State<_MixedAssetPickerSheet> {
                           _AssetThumbnail(
                             future: _thumbnailFuture(item.asset),
                           ),
-                          if (item.kind == ChatPickedAssetKind.video)
+                          if (effectiveKind == ChatPickedAssetKind.video)
                             const Align(
                               alignment: Alignment.bottomRight,
                               child: Padding(
@@ -305,11 +353,21 @@ class _MixedAssetPickerSheetState extends State<_MixedAssetPickerSheet> {
                                 ),
                               ),
                             ),
-                          if (item.kind == ChatPickedAssetKind.dynamicPhoto)
+                          if (effectiveKind == ChatPickedAssetKind.dynamicPhoto)
                             const Positioned(
                               top: 6,
                               left: 6,
                               child: _AssetLiveBadge(),
+                            ),
+                          if (_resolvingAssetIds.contains(item.asset.id))
+                            Container(
+                              color: Colors.black.withOpacity(0.18),
+                              alignment: Alignment.center,
+                              child: const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              ),
                             ),
                           if (_isSelected(item))
                             Positioned(
