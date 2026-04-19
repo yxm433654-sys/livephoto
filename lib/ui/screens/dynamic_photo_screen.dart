@@ -1,8 +1,10 @@
-﻿import 'dart:async';
+import 'dart:async';
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
+import 'package:vox_flutter/application/message/video_controller_cache.dart';
 import 'package:vox_flutter/utils/media_saver.dart';
 
 class DynamicPhotoScreen extends StatefulWidget {
@@ -54,9 +56,13 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
     _pausePreview(syncUi: false);
     final controller = _controller;
     _controller = null;
-    controller?.setVolume(0);
-    controller?.pause();
-    controller?.dispose();
+    if (controller != null && controller.value.isInitialized) {
+      unawaited(controller.setVolume(0));
+      unawaited(controller.pause());
+      VideoControllerCache.instance.put(widget.videoUrl, controller);
+    } else {
+      controller?.dispose();
+    }
     super.dispose();
   }
 
@@ -83,24 +89,23 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
       _error = null;
     }
 
-    VideoPlayerController? pendingController;
     try {
-      pendingController = VideoPlayerController.networkUrl(
-        Uri.parse(widget.videoUrl),
-      );
-      await pendingController.initialize();
-      await pendingController.setLooping(false);
-      await pendingController.setVolume(1.0);
-      if (!mounted) {
-        await pendingController.dispose();
-        pendingController = null;
+      final controller =
+          await VideoControllerCache.instance.getOrInit(widget.videoUrl);
+      if (controller == null) {
         if (!completer.isCompleted) {
           completer.complete(false);
         }
         return false;
       }
-      _controller = pendingController;
-      pendingController = null;
+      if (!mounted) {
+        await controller.dispose();
+        if (!completer.isCompleted) {
+          completer.complete(false);
+        }
+        return false;
+      }
+      _controller = controller;
       if (!completer.isCompleted) {
         completer.complete(true);
       }
@@ -112,7 +117,6 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
       }
       return false;
     } finally {
-      await pendingController?.dispose();
       _controllerReadyCompleter = null;
       final ratio = _controller?.value.aspectRatio;
       if (mounted) {
@@ -156,8 +160,8 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
     _holding = false;
     final controller = _controller;
     if (controller != null) {
-      controller.pause();
-      controller.seekTo(Duration.zero);
+      unawaited(controller.pause());
+      unawaited(controller.seekTo(Duration.zero));
     }
     if (syncUi && mounted && _showVideo) {
       setState(() => _showVideo = false);
@@ -248,19 +252,15 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
                           children: [
                             Container(color: const Color(0xFF111111)),
                             if (widget.coverUrl.trim().isNotEmpty)
-                              Image.network(
-                                widget.coverUrl,
+                              CachedNetworkImage(
+                                imageUrl: widget.coverUrl,
                                 fit: BoxFit.contain,
-                                gaplessPlayback: true,
-                                loadingBuilder:
-                                    (context, child, loadingProgress) {
-                                      if (loadingProgress == null) {
-                                        return child;
-                                      }
-                                      return const _DetailPlaceholder();
-                                    },
-                                errorBuilder: (_, __, ___) =>
+                                placeholder: (_, __) =>
                                     const _DetailPlaceholder(),
+                                errorWidget: (_, __, ___) =>
+                                    const _DetailPlaceholder(),
+                                fadeInDuration: Duration.zero,
+                                fadeOutDuration: Duration.zero,
                               )
                             else
                               const _DetailPlaceholder(),
@@ -309,7 +309,7 @@ class _DynamicPhotoScreenState extends State<DynamicPhotoScreen> {
                                         ),
                                         SizedBox(width: 8),
                                         Text(
-                                          'Preparing dynamic photo...',
+                                          'Hold to play',
                                           style: TextStyle(
                                             color: Colors.white,
                                             fontWeight: FontWeight.w600,

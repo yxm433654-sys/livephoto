@@ -32,9 +32,6 @@ class ChatMediaNavigator {
   ) async {
     if (_openingDynamicPhoto) return;
     _openingDynamicPhoto = true;
-    if (coverUrl.trim().isNotEmpty) {
-      unawaited(precacheImage(NetworkImage(coverUrl), context).catchError((_) {}));
-    }
     try {
       await Navigator.of(context).push(
         MaterialPageRoute(

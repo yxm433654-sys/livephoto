@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:vox_flutter/application/message/media_url_resolver.dart';
+import 'package:vox_flutter/application/message/video_controller_cache.dart';
 import 'package:vox_flutter/models/chat_media.dart';
 import 'package:vox_flutter/models/message.dart';
 
@@ -51,7 +52,7 @@ class MessageBubble extends StatelessWidget {
     final mq = MediaQuery.of(context);
     final mediaWidth = math.min(mq.size.width * 0.5, 244.0);
     final maxMediaHeight = math.min(mq.size.height * 0.34, 248.0);
-    final bubble = _content(mediaWidth, maxMediaHeight);
+    final bubble = _content(context, mediaWidth, maxMediaHeight);
     final avatar = _Avatar(
       name: isMine ? myName : peerName,
       avatarUrl: isMine ? myAvatarUrl : peerAvatarUrl,
@@ -114,7 +115,7 @@ class MessageBubble extends StatelessWidget {
   String get _footerStatusLabel =>
       _isFailed ? 'Failed. Tap to retry' : 'Sending';
 
-  Widget _content(double mediaWidth, double maxMediaHeight) {
+  Widget _content(BuildContext context, double mediaWidth, double maxMediaHeight) {
     final type = message.type.toUpperCase();
     final media = message.media;
 
@@ -129,7 +130,9 @@ class MessageBubble extends StatelessWidget {
     }
     if (type == 'IMAGE') return _imageBubble(mediaWidth, maxMediaHeight, media);
     if (type == 'VIDEO') return _videoBubble(mediaWidth, maxMediaHeight, media);
-    if (type == 'DYNAMIC_PHOTO') return _dynamicBubble(mediaWidth, maxMediaHeight, media);
+    if (type == 'DYNAMIC_PHOTO') {
+      return _dynamicBubble(context, mediaWidth, maxMediaHeight, media);
+    }
     if (type == 'FILE') return _fileBubble();
     return _TextBubble(
       text: message.content ?? type,
@@ -228,7 +231,12 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
-  Widget _dynamicBubble(double mediaWidth, double maxMediaHeight, ChatMedia? media) {
+  Widget _dynamicBubble(
+    BuildContext context,
+    double mediaWidth,
+    double maxMediaHeight,
+    ChatMedia? media,
+  ) {
     final size = _mediaFrameSize(
       mediaWidth: mediaWidth,
       maxMediaHeight: maxMediaHeight,
@@ -238,11 +246,26 @@ class MessageBubble extends StatelessWidget {
     final videoUrl = message.resolvedPlayUrl;
     final processing =
         (media?.processingStatus ?? '').toUpperCase() == 'PROCESSING';
+    final hasPlayableVideo = videoUrl != null && videoUrl.trim().isNotEmpty;
+
+    if (!processing && hasPlayableVideo) {
+      final resolvedVideoUrl = urlResolver.resolve(videoUrl);
+      unawaited(VideoControllerCache.instance.warmup(resolvedVideoUrl));
+      if (coverUrl != null && coverUrl.trim().isNotEmpty) {
+        final resolvedCoverUrl = urlResolver.resolve(coverUrl);
+        unawaited(
+          precacheImage(
+            CachedNetworkImageProvider(resolvedCoverUrl),
+            context,
+          ).catchError((_) {}),
+        );
+      }
+    }
 
     return GestureDetector(
       onTap: _isFailed
           ? onRetry
-          : _isSending || processing || videoUrl == null || videoUrl.trim().isEmpty
+          : _isSending || processing || !hasPlayableVideo
               ? null
               : () {
                   unawaited(
