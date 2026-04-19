@@ -116,7 +116,7 @@ class _SessionListScreenState extends State<SessionListScreen> {
             label: '添加会话',
           ),
         ),
-        PopupMenuItem<String>(
+        const PopupMenuItem<String>(
           value: 'logout',
           child: _ConversationMenuRow(
             icon: Icons.logout_rounded,

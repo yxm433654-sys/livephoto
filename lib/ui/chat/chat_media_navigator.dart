@@ -1,4 +1,6 @@
-﻿import 'package:flutter/material.dart';
+import 'dart:async';
+
+import 'package:flutter/material.dart';
 import 'package:vox_flutter/ui/screens/media_preview_screen.dart';
 
 class ChatMediaNavigator {
@@ -31,13 +33,7 @@ class ChatMediaNavigator {
     if (_openingDynamicPhoto) return;
     _openingDynamicPhoto = true;
     if (coverUrl.trim().isNotEmpty) {
-      try {
-        await precacheImage(NetworkImage(coverUrl), context);
-      } catch (_) {}
-      if (!context.mounted) {
-        _openingDynamicPhoto = false;
-        return;
-      }
+      unawaited(precacheImage(NetworkImage(coverUrl), context).catchError((_) {}));
     }
     try {
       await Navigator.of(context).push(
