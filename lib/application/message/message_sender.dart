@@ -347,7 +347,7 @@ class MessageSender {
     final upload = await workflow.uploadFileFromPath(
       filePath: filePath,
       userId: senderId,
-      skipMotionDetect: true,
+      skipMotionDetect: false,
     );
     if ((upload.fileType ?? '').toUpperCase() == 'DYNAMIC_PHOTO') {
       final coverId = upload.coverId;

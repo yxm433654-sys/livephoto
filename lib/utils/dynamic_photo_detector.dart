@@ -74,6 +74,43 @@ abstract class MotionPhotoSignatureDetector {
 class GoogleMotionPhotoSignatureDetector extends MotionPhotoSignatureDetector {
   const GoogleMotionPhotoSignatureDetector();
 
+  static const int _tailScanBytes = 32 * 1024 * 1024;
+  static const int _minMp4BoxSize = 16;
+  static const Set<String> _mp4Brands = <String>{
+    'mp41',
+    'mp42',
+    'isom',
+    'iso2',
+    'iso3',
+    'iso4',
+    'iso5',
+    'iso6',
+    'iso7',
+    'iso8',
+    'iso9',
+    'avc1',
+    'hvc1',
+    'hev1',
+    'mif1',
+    'msf1',
+    'm4v ',
+    'm4a ',
+    'f4v ',
+    'f4a ',
+    'f4p ',
+    '3gp4',
+    '3gp5',
+    '3gp6',
+    '3g2a',
+    '3g2b',
+    '3g2c',
+    'dash',
+    'cmfc',
+    'cmfs',
+    'msnv',
+    'qt  ',
+  };
+
   @override
   Future<bool> matchesFile(String filePath) async {
     final file = File(filePath);
@@ -99,22 +136,73 @@ class GoogleMotionPhotoSignatureDetector extends MotionPhotoSignatureDetector {
       final videoStart = size - offset;
       if (videoStart >= 0 && videoStart < size) {
         final window = await _readAt(file, videoStart, 64 * 1024);
-        final decoded = utf8.decode(window, allowMalformed: true).toLowerCase();
-        return _hasMp4Ftyp(decoded);
+        if (_hasMp4Ftyp(window)) {
+          return true;
+        }
       }
     }
 
-    final tail = await _readTail(file, 4 * 1024 * 1024);
-    final tailStr = utf8.decode(tail, allowMalformed: true).toLowerCase();
-    return _hasMp4Ftyp(tailStr);
+    final tail = await _readTail(file, _tailScanBytes);
+    return _hasMp4Ftyp(tail);
   }
 
-  bool _hasMp4Ftyp(String value) {
-    if (!value.contains('ftyp')) return false;
-    return value.contains('mp42') ||
-        value.contains('isom') ||
-        value.contains('avc1') ||
-        value.contains('qt');
+  bool _hasMp4Ftyp(List<int> bytes) {
+    if (bytes.length < 12) {
+      return false;
+    }
+
+    for (var i = 4; i <= bytes.length - 8; i += 1) {
+      if (bytes[i] != 0x66 ||
+          bytes[i + 1] != 0x74 ||
+          bytes[i + 2] != 0x79 ||
+          bytes[i + 3] != 0x70) {
+        continue;
+      }
+      if (!_hasValidMp4BoxHeader(bytes, i - 4)) {
+        continue;
+      }
+      final brand = ascii.decode(bytes.sublist(i + 4, i + 8)).toLowerCase();
+      if (_isLikelyMp4Brand(brand)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _hasValidMp4BoxHeader(List<int> bytes, int boxStart) {
+    if (boxStart < 0 || boxStart + 8 > bytes.length) {
+      return false;
+    }
+
+    final boxSize = ((bytes[boxStart] & 0xFF) << 24) |
+        ((bytes[boxStart + 1] & 0xFF) << 16) |
+        ((bytes[boxStart + 2] & 0xFF) << 8) |
+        (bytes[boxStart + 3] & 0xFF);
+    if (boxSize == 1) {
+      return true;
+    }
+
+    final remaining = bytes.length - boxStart;
+    return boxSize >= _minMp4BoxSize && boxSize <= remaining;
+  }
+
+  bool _isLikelyMp4Brand(String brand) {
+    if (brand.length != 4 || !_isPrintableAscii(brand)) {
+      return false;
+    }
+    return _mp4Brands.contains(brand) ||
+        brand.startsWith('mp4') ||
+        brand.startsWith('iso') ||
+        brand.startsWith('3g');
+  }
+
+  bool _isPrintableAscii(String value) {
+    for (final codeUnit in value.codeUnits) {
+      if (codeUnit < 0x20 || codeUnit > 0x7E) {
+        return false;
+      }
+    }
+    return true;
   }
 
   int? _tryParseVideoOffset(String xmp) {
